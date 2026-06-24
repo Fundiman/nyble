@@ -7,10 +7,152 @@
 #include "lexer.h"
 #include "parser.h"
 #include "interp.h"
+#include "compiler.h"
+#include "vm.h"
+
+#ifndef NYBLE_VM_THRESHOLD
+#define NYBLE_VM_THRESHOLD 300
+#endif
+
+namespace {
+
+size_t countExpr(const nyble::Expr* expr);
+size_t countStmt(const nyble::Stmt* stmt);
+
+size_t countExpr(const nyble::Expr* expr) {
+    if (!expr) return 0;
+    size_t n = 1;
+    switch (expr->type) {
+        case nyble::ASTType::Binary: {
+            auto* b = static_cast<const nyble::BinaryExprNode*>(expr);
+            n += countExpr(b->left.get()) + countExpr(b->right.get());
+            break;
+        }
+        case nyble::ASTType::Unary: {
+            auto* u = static_cast<const nyble::UnaryExprNode*>(expr);
+            n += countExpr(u->operand.get());
+            break;
+        }
+        case nyble::ASTType::Call: {
+            auto* c = static_cast<const nyble::CallExprNode*>(expr);
+            n += countExpr(c->callee.get());
+            for (auto& a : c->args) n += countExpr(a.get());
+            break;
+        }
+        case nyble::ASTType::Member: {
+            auto* m = static_cast<const nyble::MemberExprNode*>(expr);
+            n += countExpr(m->object.get()) + countExpr(m->property.get());
+            break;
+        }
+        case nyble::ASTType::ArrayLit: {
+            auto* a = static_cast<const nyble::ArrayLitNode*>(expr);
+            for (auto& e : a->elements) n += countExpr(e.get());
+            break;
+        }
+        case nyble::ASTType::ObjectLit: {
+            auto* o = static_cast<const nyble::ObjectLitNode*>(expr);
+            for (auto& [k, v] : o->properties) n += countExpr(v.get());
+            break;
+        }
+        case nyble::ASTType::Assignment: {
+            auto* a = static_cast<const nyble::AssignNode*>(expr);
+            n += countExpr(a->target.get()) + countExpr(a->value.get());
+            break;
+        }
+        case nyble::ASTType::Conditional: {
+            auto* c = static_cast<const nyble::ConditionalNode*>(expr);
+            n += countExpr(c->cond.get()) + countExpr(c->thenExpr.get()) + countExpr(c->elseExpr.get());
+            break;
+        }
+        case nyble::ASTType::ArrowFunc: {
+            auto* a = static_cast<const nyble::ArrowFuncNode*>(expr);
+            n += countStmt(a->body.get()) + countExpr(a->exprBody.get());
+            break;
+        }
+        case nyble::ASTType::Identifier:
+        case nyble::ASTType::Literal:
+            break;
+        default: break;
+    }
+    return n;
+}
+
+size_t countStmt(const nyble::Stmt* stmt) {
+    if (!stmt) return 0;
+    size_t n = 1;
+    switch (stmt->type) {
+        case nyble::ASTType::Block: {
+            auto* b = static_cast<const nyble::BlockStmt*>(stmt);
+            for (auto& s : b->stmts) n += countStmt(s.get());
+            break;
+        }
+        case nyble::ASTType::ExprStmt: {
+            auto* e = static_cast<const nyble::ExprStmtNode*>(stmt);
+            n += countExpr(e->expr.get());
+            break;
+        }
+        case nyble::ASTType::VarDecl: {
+            auto* v = static_cast<const nyble::VarDeclNode*>(stmt);
+            n += countExpr(v->initializer.get());
+            break;
+        }
+        case nyble::ASTType::FunDecl: {
+            auto* f = static_cast<const nyble::FunDeclNode*>(stmt);
+            n += countStmt(f->body.get());
+            break;
+        }
+        case nyble::ASTType::If: {
+            auto* i = static_cast<const nyble::IfNode*>(stmt);
+            n += countExpr(i->cond.get()) + countStmt(i->thenBranch.get()) + countStmt(i->elseBranch.get());
+            break;
+        }
+        case nyble::ASTType::While: {
+            auto* w = static_cast<const nyble::WhileNode*>(stmt);
+            n += countExpr(w->cond.get()) + countStmt(w->body.get());
+            break;
+        }
+        case nyble::ASTType::DoWhile: {
+            auto* d = static_cast<const nyble::DoWhileNode*>(stmt);
+            n += countStmt(d->body.get()) + countExpr(d->cond.get());
+            break;
+        }
+        case nyble::ASTType::For: {
+            auto* f = static_cast<const nyble::ForNode*>(stmt);
+            n += countStmt(f->init.get()) + countExpr(f->cond.get()) + countExpr(f->inc.get()) + countStmt(f->body.get());
+            break;
+        }
+        case nyble::ASTType::Return: {
+            auto* r = static_cast<const nyble::ReturnNode*>(stmt);
+            n += countExpr(r->value.get());
+            break;
+        }
+        case nyble::ASTType::Switch: {
+            auto* s = static_cast<const nyble::SwitchNode*>(stmt);
+            n += countExpr(s->expr.get());
+            for (auto& [c, stmts] : s->cases) {
+                n += countExpr(c.get());
+                for (auto& ss : stmts) n += countStmt(ss.get());
+            }
+            for (auto& ss : s->defaultCase) n += countStmt(ss.get());
+            break;
+        }
+        case nyble::ASTType::Break:
+        case nyble::ASTType::Continue:
+            break;
+        default: break;
+    }
+    return n;
+}
+
+size_t countAST(const nyble::Program& prog) {
+    size_t n = 0;
+    for (auto& s : prog.stmts) n += countStmt(s.get());
+    return n;
+}
+
+} // anonymous namespace
 
 int main(int argc, char* argv[]) {
-    nyble::Interpreter interp;
-
     if (argc > 1) {
         std::string filename = argv[1];
         std::ifstream file(filename);
@@ -36,7 +178,18 @@ int main(int argc, char* argv[]) {
         }
 
         try {
-            interp.evaluate(program);
+            size_t complexity = countAST(program);
+
+            if (complexity < NYBLE_VM_THRESHOLD) {
+                nyble::Interpreter interp;
+                interp.evaluate(program);
+            } else {
+                nyble::BytecodeChunk chunk;
+                nyble::Compiler comp(&chunk);
+                comp.compile(program);
+                nyble::VM vm;
+                vm.run(&chunk, vm.globalEnv);
+            }
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
             return 1;
@@ -46,7 +199,8 @@ int main(int argc, char* argv[]) {
     }
 
     // REPL
-    std::cout << "NybleJS v0.1.0 - JavaScript Engine\n";
+    nyble::VM vm;
+    std::cout << "NybleJS v0.2.0 (Hybrid Engine) - JavaScript Engine\n";
     std::cout << "Type 'exit' to quit\n\n";
 
     std::string line;
@@ -65,7 +219,6 @@ int main(int argc, char* argv[]) {
 
         source += line + "\n";
 
-        // Try to parse and execute
         nyble::Lexer lexer(source);
         auto tokens = lexer.tokenize();
 
@@ -73,7 +226,6 @@ int main(int argc, char* argv[]) {
         auto program = parser.parse();
 
         if (!parser.getErrors().empty()) {
-            // Check if it's just incomplete input
             bool incomplete = false;
             for (const auto& err : parser.getErrors()) {
                 if (err.find("Expected") != std::string::npos) {
@@ -81,12 +233,15 @@ int main(int argc, char* argv[]) {
                 }
             }
             if (incomplete && source.find(';') == std::string::npos) {
-                continue; // More input needed
+                continue;
             }
         }
 
         try {
-            auto result = interp.evaluate(program);
+            nyble::BytecodeChunk chunk;
+            nyble::Compiler comp(&chunk);
+            comp.compile(program);
+            auto result = vm.run(&chunk, vm.globalEnv);
             if (result.type != nyble::ValueType::Undefined && result.type != nyble::ValueType::Null) {
                 std::cout << result.toString() << "\n";
             }

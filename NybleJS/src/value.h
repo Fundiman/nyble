@@ -15,6 +15,7 @@ namespace nyble {
 
 struct Environment;
 struct BlockStmt;
+struct BytecodeChunk;
 
 enum class ValueType {
     Null,
@@ -36,11 +37,15 @@ struct ArrayData {
     std::vector<class Value> elements;
 };
 
+struct BytecodeChunk;
+
 struct FunctionData {
     std::vector<std::string> params;
     const BlockStmt* body;
     class Expr* exprBody;
     std::shared_ptr<Environment> closure;
+    BytecodeChunk* chunk;
+    FunctionData() : body(nullptr), exprBody(nullptr), chunk(nullptr) {}
 };
 
 using NativeFn = std::function<class Value(const std::vector<class Value>&)>;
