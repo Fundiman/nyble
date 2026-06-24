@@ -23,3 +23,6 @@ __pycache__/
 *.sln
 *.suo
 Thumbs.db
+
+# Ignored marker files
+*.ignore
