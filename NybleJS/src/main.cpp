@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 #include <memory>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include "lexer.h"
 #include "parser.h"
 #include "interp.h"
@@ -152,7 +156,20 @@ size_t countAST(const nyble::Program& prog) {
 
 } // anonymous namespace
 
+static size_t detectSystemMemoryMB() {
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return (size_t)(status.ullTotalPhys / (1024 * 1024));
+#endif
+    return 2048;
+}
+
 int main(int argc, char* argv[]) {
+    size_t sysMemMB = detectSystemMemoryMB();
+    nyble::gHeap.setMemoryBudget((sysMemMB * 1024ULL * 1024ULL) / 8ULL);
+
     if (argc > 1) {
         std::string filename = argv[1];
         std::ifstream file(filename);
@@ -182,12 +199,18 @@ int main(int argc, char* argv[]) {
 
             if (complexity < NYBLE_VM_THRESHOLD) {
                 nyble::Interpreter interp;
+                nyble::gHeap.rootTracer = [&interp](std::vector<nyble::GCHeader*>& wl) {
+                    if (interp.currentEnv) interp.currentEnv->traceGCValues(wl);
+                };
                 interp.evaluate(program);
             } else {
                 nyble::BytecodeChunk chunk;
                 nyble::Compiler comp(&chunk);
                 comp.compile(program);
                 nyble::VM vm;
+                nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
+                    if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
+                };
                 vm.run(&chunk, vm.globalEnv);
             }
         } catch (const std::exception& e) {
@@ -200,6 +223,9 @@ int main(int argc, char* argv[]) {
 
     // REPL
     nyble::VM vm;
+    nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
+        if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
+    };
     std::cout << "NybleJS v0.2.0 (Hybrid Engine) - JavaScript Engine\n";
     std::cout << "Type 'exit' to quit\n\n";
 

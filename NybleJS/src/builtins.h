@@ -277,7 +277,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
                     else if (s[i] == ',' && depth == 0) break;
                     i++;
                 }
-                arr.arrVal.elements.push_back(Value::makeStr(s.substr(start, i - start)));
+                arr.arrVal->elements.push_back(Value::makeStr(s.substr(start, i - start)));
             }
             return arr;
         }
@@ -385,13 +385,13 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     arrayObj.setProperty("from", Value::makeNative([](const std::vector<Value>& args) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].isArray()) {
-            arr.arrVal.elements = args[0].arrVal.elements;
+            arr.arrVal->elements = args[0].arrVal->elements;
         }
         return arr;
     }));
     arrayObj.setProperty("of", Value::makeNative([](const std::vector<Value>& args) -> Value {
         Value arr = Value::makeArr();
-        arr.arrVal.elements = args;
+        arr.arrVal->elements = args;
         return arr;
     }));
     env->define("Array", arrayObj);
@@ -401,8 +401,8 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     objectObj.setProperty("keys", Value::makeNative([](const std::vector<Value>& args) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
-            for (const auto& [key, _] : args[0].objVal.properties) {
-                arr.arrVal.elements.push_back(Value::makeStr(key));
+            for (const auto& [key, _] : args[0].objVal->properties) {
+                arr.arrVal->elements.push_back(Value::makeStr(key));
             }
         }
         return arr;
@@ -410,8 +410,8 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     objectObj.setProperty("values", Value::makeNative([](const std::vector<Value>& args) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
-            for (const auto& [_, val] : args[0].objVal.properties) {
-                arr.arrVal.elements.push_back(val);
+            for (const auto& [_, val] : args[0].objVal->properties) {
+                arr.arrVal->elements.push_back(val);
             }
         }
         return arr;
@@ -419,11 +419,11 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     objectObj.setProperty("entries", Value::makeNative([](const std::vector<Value>& args) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
-            for (const auto& [key, val] : args[0].objVal.properties) {
+            for (const auto& [key, val] : args[0].objVal->properties) {
                 Value entry = Value::makeArr();
-                entry.arrVal.elements.push_back(Value::makeStr(key));
-                entry.arrVal.elements.push_back(val);
-                arr.arrVal.elements.push_back(entry);
+                entry.arrVal->elements.push_back(Value::makeStr(key));
+                entry.arrVal->elements.push_back(val);
+                arr.arrVal->elements.push_back(entry);
             }
         }
         return arr;
@@ -433,7 +433,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         Value target = args[0];
         for (size_t i = 1; i < args.size(); i++) {
             if (args[i].type == ValueType::Object) {
-                for (const auto& [key, val] : args[i].objVal.properties) {
+                for (const auto& [key, val] : args[i].objVal->properties) {
                     target.setProperty(key, val);
                 }
             }

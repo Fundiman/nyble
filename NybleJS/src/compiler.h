@@ -275,7 +275,7 @@ struct Compiler {
             case ValueType::Undefined: emit(OpCode::PUSH_UNDEFINED); break;
             case ValueType::Boolean: emit(v.boolVal ? OpCode::PUSH_TRUE : OpCode::PUSH_FALSE); break;
             case ValueType::Number: emit(OpCode::PUSH_NUM); emitShort((uint16_t)makeNum(v.numVal)); break;
-            case ValueType::String: emit(OpCode::PUSH_STRING); emitShort((uint16_t)makeString(v.strVal)); break;
+            case ValueType::String: emit(OpCode::PUSH_STRING); emitShort((uint16_t)makeString(v.strVal ? v.strVal->str : "")); break;
             default: emit(OpCode::PUSH_UNDEFINED);
         }
     }

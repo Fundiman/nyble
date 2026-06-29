@@ -2,9 +2,12 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
+#include <vector>
 #include "value.h"
 
 namespace nyble {
+
+struct GCHeader;
 
 class Environment : public std::enable_shared_from_this<Environment> {
 public:
@@ -60,6 +63,45 @@ public:
     std::shared_ptr<Environment> createChild() {
         return std::make_shared<Environment>(shared_from_this());
     }
+
+    void traceGCValues(std::vector<GCHeader*>& worklist) {
+        for (auto& [key, val] : values) {
+            GCHeader* h = nullptr;
+            switch (val.type) {
+                case ValueType::String: h = val.strVal; break;
+                case ValueType::Object: h = val.objVal; break;
+                case ValueType::Array:  h = val.arrVal; break;
+                case ValueType::Function: h = val.funcVal; break;
+                default: continue;
+            }
+            if (h && !h->marked) {
+                h->marked = true;
+                worklist.push_back(h);
+            }
+        }
+        if (parent) {
+            parent->traceGCValues(worklist);
+        }
+    }
 };
+
+inline void GCFunction::trace(std::vector<GCHeader*>& worklist) {
+    if (closure) {
+        for (auto& [key, val] : closure->values) {
+            GCHeader* h = nullptr;
+            switch (val.type) {
+                case ValueType::String: h = val.strVal; break;
+                case ValueType::Object: h = val.objVal; break;
+                case ValueType::Array:  h = val.arrVal; break;
+                case ValueType::Function: h = val.funcVal; break;
+                default: continue;
+            }
+            if (h && !h->marked) {
+                h->marked = true;
+                worklist.push_back(h);
+            }
+        }
+    }
+}
 
 }

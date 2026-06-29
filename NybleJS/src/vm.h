@@ -142,10 +142,10 @@ public:
                 case OpCode::NEW_ARRAY: {
                     uint16_t count = readShort(cf);
                     Value arr = Value::makeArr();
-                    arr.arrVal.elements.reserve(count);
+                    arr.arrVal->elements.reserve(count);
                     size_t start = stack.size() - count;
                     for (uint16_t i = 0; i < count; i++)
-                        arr.arrVal.elements.push_back(stack[start + i]);
+                        arr.arrVal->elements.push_back(stack[start + i]);
                     stack.resize(start);
                     stack.push_back(arr);
                     break;
@@ -307,7 +307,7 @@ public:
 
                 case OpCode::MAKE_FUNCTION: {
                     uint16_t idx = readShort(cf);
-                    auto funcData = std::make_shared<FunctionData>();
+                    auto funcData = gHeap.allocate<GCFunction>();
                     funcData->closure = cf.env;
                     auto fchunk = cf.chunk->functions[idx];
                     funcData->chunk = fchunk;
@@ -370,20 +370,20 @@ public:
 
     Value getProperty(const Value& obj, const std::string& name) {
         if (obj.type == ValueType::String) {
-            if (name == "length") return Value::makeNum((double)obj.strVal.size());
+            if (name == "length") return Value::makeNum((double)obj.strVal->str.size());
             if (name == "charAt")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
                     int i = a.empty()?0:(int)a[0].toNumber();
                     if(i<0||i>=(int)str.size()) return Value::makeStr("");
                     return Value::makeStr(std::string(1,str[i]));
                 });
             if (name == "indexOf")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
                     auto p = str.find(a.empty()?"":a[0].toString());
                     return Value::makeNum(p==std::string::npos?-1.0:(double)p);
                 });
             if (name == "slice")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
                     int s = a.empty()?0:(int)a[0].toNumber();
                     int e = a.size()<2?(int)str.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)str.size()+s);
@@ -392,99 +392,99 @@ public:
                     return Value::makeStr(str.substr(s,e-s));
                 });
             if (name == "toUpperCase")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
                     std::string r=str; std::transform(r.begin(),r.end(),r.begin(),::toupper); return Value::makeStr(r);});
             if (name == "toLowerCase")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
                     std::string r=str; std::transform(r.begin(),r.end(),r.begin(),::tolower); return Value::makeStr(r);});
             if (name == "trim")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
                     std::string s=str; s.erase(0,s.find_first_not_of(" \t\n\r")); s.erase(s.find_last_not_of(" \t\n\r")+1); return Value::makeStr(s);});
             if (name == "startsWith")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
                     return Value::makeBool(str.find(a.empty()?"":a[0].toString())==0);});
             if (name == "endsWith")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
                     std::string s=a.empty()?"":a[0].toString(); return Value::makeBool(str.size()>=s.size()&&str.substr(str.size()-s.size())==s);});
             if (name == "includes")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
                     return Value::makeBool(str.find(a.empty()?"":a[0].toString())!=std::string::npos);});
             if (name == "repeat")
-                return Value::makeNative([str=obj.strVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
                     int c=a.empty()?0:(int)a[0].toNumber(); if(c<=0)return Value::makeStr("");
                     std::string r; r.reserve(str.size()*c); for(int i=0;i<c;i++)r+=str; return Value::makeStr(r);});
             return Value::makeUndefined();
         }
 
         if (obj.type == ValueType::Array) {
-            if (name == "length") return Value::makeNum((double)obj.arrVal.elements.size());
+            if (name == "length") return Value::makeNum((double)obj.arrVal->elements.size());
             if (name == "push")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
                     for(const auto& v:a)arrPtr->elements.push_back(v); return Value::makeNum((double)arrPtr->elements.size());});
             if (name == "pop")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>&) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&) mutable->Value{
                     if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
             if (name == "shift")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>&) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&) mutable->Value{
                     if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
             if (name == "unshift")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
                     arrPtr->elements.insert(arrPtr->elements.begin(),a.begin(),a.end()); return Value::makeNum((double)arrPtr->elements.size());});
             if (name == "indexOf")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty())return Value::makeNum(-1);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value eq=arrPtr->elements[i].eq(a[0],true);if(eq.boolVal)return Value::makeNum((double)i);}
                     return Value::makeNum(-1);});
             if (name == "includes")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty())return Value::makeBool(false);
                     for(const auto& e:arrPtr->elements){Value eq=e.eq(a[0],true);if(eq.boolVal)return Value::makeBool(true);}
                     return Value::makeBool(false);});
             if (name == "join")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     std::string sep=a.empty()?",":a[0].toString(); std::string r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){if(i>0)r+=sep;r+=arrPtr->elements[i].toString();}
                     return Value::makeStr(r);});
             if (name == "slice")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     int s=a.empty()?0:(int)a[0].toNumber(); int e=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); if(e<0)e=std::max(0,(int)arrPtr->elements.size()+e);
-                    Value r=Value::makeArr(); for(int i=s;i<e&&i<(int)arrPtr->elements.size();i++)r.arrVal.elements.push_back(arrPtr->elements[i]); return r;});
+                    Value r=Value::makeArr(); for(int i=s;i<e&&i<(int)arrPtr->elements.size();i++)r.arrVal->elements.push_back(arrPtr->elements[i]); return r;});
             if (name == "splice")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
                     int s=a.empty()?0:(int)a[0].toNumber(); int dc=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); dc=std::min(dc,(int)arrPtr->elements.size()-s);
                     Value rem=Value::makeArr(); auto it=arrPtr->elements.begin()+s;
-                    for(int i=0;i<dc;i++)rem.arrVal.elements.push_back(*(it+i));
+                    for(int i=0;i<dc;i++)rem.arrVal->elements.push_back(*(it+i));
                     arrPtr->elements.erase(it,it+dc);
                     for(size_t i=2;i<a.size();i++)arrPtr->elements.insert(arrPtr->elements.begin()+s+(i-2),a[i]);
                     return rem;});
             if (name == "forEach")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
-                        for(const auto& e:arrPtr->elements)ca[2].arrVal.elements.push_back(e);
+                        for(const auto& e:arrPtr->elements)ca[2].arrVal->elements.push_back(e);
                         callValue(a[0], ca);}
                     return Value::makeUndefined();});
             if (name == "map")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     Value r=Value::makeArr(); if(a.empty()||!a[0].isFunction())return r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
-                        for(const auto& e:arrPtr->elements)ca[2].arrVal.elements.push_back(e);
-                        r.arrVal.elements.push_back(callValue(a[0], ca));}
+                        for(const auto& e:arrPtr->elements)ca[2].arrVal->elements.push_back(e);
+                        r.arrVal->elements.push_back(callValue(a[0], ca));}
                     return r;});
             if (name == "filter")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     Value r=Value::makeArr(); if(a.empty()||!a[0].isFunction())return r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
-                        for(const auto& e:arrPtr->elements)ca[2].arrVal.elements.push_back(e);
-                        Value rv=callValue(a[0], ca); if(rv.isTruthy())r.arrVal.elements.push_back(arrPtr->elements[i]);}
+                        for(const auto& e:arrPtr->elements)ca[2].arrVal->elements.push_back(e);
+                        Value rv=callValue(a[0], ca); if(rv.isTruthy())r.arrVal->elements.push_back(arrPtr->elements[i]);}
                     return r;});
             if (name == "reduce")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     bool hasInit=a.size()>1; Value acc=hasInit?a[1]:Value::makeUndefined();
                     size_t si=hasInit?0:1; if(!hasInit&&!arrPtr->elements.empty())acc=arrPtr->elements[0];
@@ -492,32 +492,32 @@ public:
                         acc=callValue(a[0], {acc,arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});
                     return acc;});
             if (name == "find")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(r.isTruthy())return arrPtr->elements[i];}
                     return Value::makeUndefined();});
             if (name == "some")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeBool(false);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(r.isTruthy())return Value::makeBool(true);}
                     return Value::makeBool(false);});
             if (name == "every")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeBool(false);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(!r.isTruthy())return Value::makeBool(false);}
                     return Value::makeBool(true);});
             if (name == "sort")
-                return Value::makeNative([this, arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
                     if(a.empty()||!a[0].isFunction())std::sort(arrPtr->elements.begin(),arrPtr->elements.end(),[](const Value& x,const Value& y){return x.toNumber()<y.toNumber();});
                     else std::sort(arrPtr->elements.begin(),arrPtr->elements.end(),[this,&a](const Value& x,const Value& y){return callValue(a[0],{x,y}).toNumber()<0;});
-                    Value r=Value::makeArr(); r.arrVal.elements=arrPtr->elements; return r;});
+                    Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements; return r;});
             if (name == "reverse")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>&)->Value{
-                    std::reverse(arrPtr->elements.begin(),arrPtr->elements.end()); Value r=Value::makeArr(); r.arrVal.elements=arrPtr->elements; return r;});
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&)->Value{
+                    std::reverse(arrPtr->elements.begin(),arrPtr->elements.end()); Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements; return r;});
             if (name == "concat")
-                return Value::makeNative([arrPtr=std::make_shared<ArrayData>(obj.arrVal)](const std::vector<Value>& a)->Value{
-                    Value r=Value::makeArr(); r.arrVal.elements=arrPtr->elements;
-                    for(const auto& v:a){if(v.isArray())r.arrVal.elements.insert(r.arrVal.elements.end(),v.arrVal.elements.begin(),v.arrVal.elements.end());else r.arrVal.elements.push_back(v);}
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                    Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements;
+                    for(const auto& v:a){if(v.isArray())r.arrVal->elements.insert(r.arrVal->elements.end(),v.arrVal->elements.begin(),v.arrVal->elements.end());else r.arrVal->elements.push_back(v);}
                     return r;});
             return Value::makeUndefined();
         }
