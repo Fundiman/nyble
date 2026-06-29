@@ -45,6 +45,8 @@ struct Compiler {
             case ASTType::Break: emitJump(OpCode::JMP); break;
             case ASTType::Continue: emitLoop(loopStart); break;
             case ASTType::Switch: compileSwitch(static_cast<SwitchNode*>(stmt)); break;
+            case ASTType::Throw: compileThrow(static_cast<ThrowNode*>(stmt)); break;
+            case ASTType::Try: compileTry(static_cast<TryNode*>(stmt)); break;
             default: break;
         }
     }
@@ -169,6 +171,96 @@ struct Compiler {
         for (auto j : jumps) patchJump(j);
         if (hasDef) patchJump(defPatch);
         emit(OpCode::POP);
+    }
+
+    void compileThrow(ThrowNode* stmt) {
+        if (stmt->value) compileExpr(stmt->value.get());
+        else emit(OpCode::PUSH_UNDEFINED);
+        emit(OpCode::THROW);
+    }
+
+    void compileTry(TryNode* stmt) {
+        // PUSH_TRY catch_offset finally_offset (absolute byte offsets from chunk start)
+        size_t tryInstr = chunk->count();
+        emit(OpCode::PUSH_TRY);
+        emitByte(0); emitByte(0); // catch offset placeholder (absolute)
+        emitByte(0); emitByte(0); // finally offset placeholder (absolute)
+
+        // Try block
+        enterScope();
+        for (auto& s : stmt->tryBlock->stmts) compileStmt(s.get());
+        exitScope();
+        emit(OpCode::POP_TRY);
+
+        // Normal path: compile finally inline (if present)
+        if (stmt->finallyBlock) {
+            enterScope();
+            for (auto& s : stmt->finallyBlock->stmts) compileStmt(s.get());
+            exitScope();
+        }
+        size_t afterTry = emitJump(OpCode::JMP);
+
+        // Catch/Finally exception handler area starts here
+        size_t handlerPos = chunk->count();
+
+        if (stmt->catchBlock) {
+            // Patch catch offset (absolute position)
+            chunk->patch(tryInstr + 1, (uint16_t)handlerPos);
+
+            // Exception enters catch handler - thrown value is on stack
+            // (throw handler already popped the PUSH_TRY entry)
+            size_t ns = makeString(stmt->catchParam);
+            emit(OpCode::STORE);
+            emitShort((uint16_t)ns);
+
+            size_t innerTryPos = 0;
+            if (stmt->finallyBlock) {
+                // Wrap catch body in inner try/finally so finally runs if catch throws
+                innerTryPos = chunk->count();
+                emit(OpCode::PUSH_TRY);
+                emitByte(0); emitByte(0); // no catch (absolute)
+                emitByte(0); emitByte(0); // finally placeholder (absolute)
+            }
+
+            enterScope();
+            for (auto& s : stmt->catchBlock->stmts) compileStmt(s.get());
+            exitScope();
+
+            if (stmt->finallyBlock) {
+                emit(OpCode::POP_TRY);
+                // Normal exit from catch: compile finally inline
+                enterScope();
+                for (auto& s : stmt->finallyBlock->stmts) compileStmt(s.get());
+                exitScope();
+                size_t afterCatch = emitJump(OpCode::JMP);
+
+                // Exception path from catch body: inner finally handler
+                size_t innerFinallyPos = chunk->count();
+                chunk->patch(innerTryPos + 3, (uint16_t)innerFinallyPos);
+
+                // Duplicate finally block for exception path
+                enterScope();
+                for (auto& s : stmt->finallyBlock->stmts) compileStmt(s.get());
+                exitScope();
+                emit(OpCode::RETHROW);
+
+                patchJump(afterCatch);
+            }
+        }
+
+        if (stmt->finallyBlock && !stmt->catchBlock) {
+            // Only finally, no catch - exception enters directly at handlerPos
+            chunk->patch(tryInstr + 3, (uint16_t)handlerPos);
+
+            // No catch entry - just emit duplicated finally for exception path
+            // (isThrowing stays true after finally, will propagate)
+            enterScope();
+            for (auto& s : stmt->finallyBlock->stmts) compileStmt(s.get());
+            exitScope();
+            // isThrowing is still true, so at loop top it'll propagate
+        }
+
+        patchJump(afterTry);
     }
 
     void compileExpr(Expr* expr) {

@@ -140,6 +140,16 @@ size_t countStmt(const nyble::Stmt* stmt) {
             for (auto& ss : s->defaultCase) n += countStmt(ss.get());
             break;
         }
+        case nyble::ASTType::Throw: {
+            auto* t = static_cast<const nyble::ThrowNode*>(stmt);
+            n += countExpr(t->value.get());
+            break;
+        }
+        case nyble::ASTType::Try: {
+            auto* t = static_cast<const nyble::TryNode*>(stmt);
+            n += countStmt(t->tryBlock.get()) + countStmt(t->catchBlock.get()) + countStmt(t->finallyBlock.get());
+            break;
+        }
         case nyble::ASTType::Break:
         case nyble::ASTType::Continue:
             break;
@@ -211,8 +221,16 @@ int main(int argc, char* argv[]) {
                 nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
                     if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
                 };
-                vm.run(&chunk, vm.globalEnv);
+                try {
+                    vm.run(&chunk, vm.globalEnv);
+                } catch (const nyble::VMThrow& vt) {
+                    std::cerr << "Uncaught: " << vt.value.toString() << "\n";
+                    return 1;
+                }
             }
+        } catch (const nyble::Interpreter::ThrowSignal& ts) {
+            std::cerr << "Uncaught: " << ts.value.toString() << "\n";
+            return 1;
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";
             return 1;
@@ -267,9 +285,13 @@ int main(int argc, char* argv[]) {
             nyble::BytecodeChunk chunk;
             nyble::Compiler comp(&chunk);
             comp.compile(program);
-            auto result = vm.run(&chunk, vm.globalEnv);
-            if (result.type != nyble::ValueType::Undefined && result.type != nyble::ValueType::Null) {
-                std::cout << result.toString() << "\n";
+            try {
+                auto result = vm.run(&chunk, vm.globalEnv);
+                if (result.type != nyble::ValueType::Undefined && result.type != nyble::ValueType::Null) {
+                    std::cout << result.toString() << "\n";
+                }
+            } catch (const nyble::VMThrow& vt) {
+                std::cerr << "Uncaught: " << vt.value.toString() << "\n";
             }
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << "\n";

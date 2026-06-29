@@ -78,6 +78,8 @@ private:
         if (match(TokenType::Break)) { auto s = std::make_unique<BreakNode>(); s->line = previous().line; consume(TokenType::Semicolon, ";"); return s; }
         if (match(TokenType::Continue)) { auto s = std::make_unique<ContinueNode>(); s->line = previous().line; consume(TokenType::Semicolon, ";"); return s; }
         if (match(TokenType::Switch)) return parseSwitchStmt();
+        if (match(TokenType::Throw)) return parseThrowStmt();
+        if (match(TokenType::Try)) return parseTryStmt();
         return parseExprStmt();
     }
 
@@ -214,6 +216,43 @@ private:
             } else { error("Expected case or default"); break; }
         }
         consume(TokenType::RBrace, "Expected '}'");
+        return stmt;
+    }
+
+    std::unique_ptr<ThrowNode> parseThrowStmt() {
+        auto stmt = std::make_unique<ThrowNode>();
+        stmt->line = previous().line;
+        if (!check(TokenType::Semicolon) && !check(TokenType::RBrace)) {
+            stmt->value = parseExpr();
+        }
+        consume(TokenType::Semicolon, "Expected ';'");
+        return stmt;
+    }
+
+    std::unique_ptr<TryNode> parseTryStmt() {
+        auto stmt = std::make_unique<TryNode>();
+        stmt->line = previous().line;
+        consume(TokenType::LBrace, "Expected '{'");
+        stmt->tryBlock = parseBlock();
+
+        if (match(TokenType::Catch)) {
+            consume(TokenType::LParen, "Expected '('");
+            Token param = consume(TokenType::Identifier, "Expected catch parameter");
+            stmt->catchParam = param.lexeme;
+            consume(TokenType::RParen, "Expected ')'");
+            consume(TokenType::LBrace, "Expected '{'");
+            stmt->catchBlock = parseBlock();
+        }
+
+        if (match(TokenType::Finally)) {
+            consume(TokenType::LBrace, "Expected '{'");
+            stmt->finallyBlock = parseBlock();
+        }
+
+        if (!stmt->catchBlock && !stmt->finallyBlock) {
+            error("Expected catch or finally");
+        }
+
         return stmt;
     }
 

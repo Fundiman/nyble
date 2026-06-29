@@ -9,7 +9,7 @@ namespace nyble {
 enum class ASTType {
     // Statements
     Block, ExprStmt, VarDecl, FunDecl, If, While, DoWhile, For,
-    Return, Break, Continue, Switch,
+    Return, Break, Continue, Switch, Throw, Try,
     // Expressions
     Binary, Unary, Call, Member, Identifier, Literal,
     ArrayLit, ObjectLit, Assignment, Conditional, ArrowFunc
@@ -61,6 +61,18 @@ struct SwitchNode : Stmt {
     std::unique_ptr<Expr> expr;
     std::vector<std::pair<std::unique_ptr<Expr>, std::vector<std::unique_ptr<Stmt>>>> cases;
     std::vector<std::unique_ptr<Stmt>> defaultCase;
+};
+
+struct ThrowNode : Stmt {
+    ThrowNode() { type = ASTType::Throw; }
+    std::unique_ptr<Expr> value;
+};
+struct TryNode : Stmt {
+    TryNode() { type = ASTType::Try; }
+    std::unique_ptr<BlockStmt> tryBlock;
+    std::string catchParam;
+    std::unique_ptr<BlockStmt> catchBlock;
+    std::unique_ptr<BlockStmt> finallyBlock;
 };
 
 struct BinaryExprNode : Expr { BinaryExprNode() { type = ASTType::Binary; } std::unique_ptr<Expr> left; std::unique_ptr<Expr> right; std::string op; };

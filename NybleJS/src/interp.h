@@ -15,6 +15,7 @@ public:
     struct ReturnSignal { Value value; };
     struct BreakSignal {};
     struct ContinueSignal {};
+    struct ThrowSignal { Value value; };
 
     Interpreter() {
         globalEnv = std::make_shared<Environment>();
@@ -47,6 +48,8 @@ public:
             case ASTType::Break: throw BreakSignal{};
             case ASTType::Continue: throw ContinueSignal{};
             case ASTType::Switch: return executeSwitch(static_cast<SwitchNode*>(stmt));
+            case ASTType::Throw: return executeThrow(static_cast<ThrowNode*>(stmt));
+            case ASTType::Try: return executeTry(static_cast<TryNode*>(stmt));
             default: return Value::makeUndefined();
         }
     }
@@ -179,6 +182,99 @@ private:
                 catch (const BreakSignal&) { return result; }
             }
         }
+        return result;
+    }
+
+    Value executeThrow(ThrowNode* stmt) {
+        Value val = Value::makeUndefined();
+        if (stmt->value) val = evaluateExpr(stmt->value.get());
+        throw ThrowSignal{val};
+    }
+
+    Value executeTry(TryNode* stmt) {
+        Value result;
+        bool threw = false;
+        Value thrownValue;
+        bool hasReturn = false;
+        ReturnSignal retSig{Value::makeUndefined()};
+        bool hasBreak = false;
+        BreakSignal brkSig;
+        bool hasContinue = false;
+        ContinueSignal contSig;
+
+        {
+            auto prev = currentEnv;
+            currentEnv = currentEnv->createChild();
+            try {
+                for (const auto& s : stmt->tryBlock->stmts)
+                    result = execute(s.get());
+            } catch (const ThrowSignal& ts) {
+                threw = true;
+                thrownValue = ts.value;
+            } catch (const ReturnSignal& rs) {
+                hasReturn = true;
+                retSig = rs;
+            } catch (const BreakSignal& bs) {
+                hasBreak = true;
+                brkSig = bs;
+            } catch (const ContinueSignal& cs) {
+                hasContinue = true;
+                contSig = cs;
+            }
+            currentEnv = prev;
+        }
+
+        if (threw && stmt->catchBlock) {
+            auto prev = currentEnv;
+            currentEnv = currentEnv->createChild();
+            currentEnv->define(stmt->catchParam, thrownValue);
+            try {
+                for (const auto& s : stmt->catchBlock->stmts)
+                    result = execute(s.get());
+                threw = false;
+            } catch (const ThrowSignal& ts) {
+                threw = true;
+                thrownValue = ts.value;
+            } catch (const ReturnSignal& rs) {
+                hasReturn = true;
+                retSig = rs;
+            } catch (const BreakSignal& bs) {
+                hasBreak = true;
+                brkSig = bs;
+            } catch (const ContinueSignal& cs) {
+                hasContinue = true;
+                contSig = cs;
+            }
+            currentEnv = prev;
+        }
+
+        if (stmt->finallyBlock) {
+            auto prev = currentEnv;
+            currentEnv = currentEnv->createChild();
+            try {
+                for (const auto& s : stmt->finallyBlock->stmts)
+                    result = execute(s.get());
+            } catch (const ThrowSignal& ts) {
+                threw = true;
+                thrownValue = ts.value;
+            } catch (const ReturnSignal& rs) {
+                hasReturn = true;
+                retSig = rs;
+            } catch (const BreakSignal& bs) {
+                hasBreak = true;
+                brkSig = bs;
+            } catch (const ContinueSignal& cs) {
+                hasContinue = true;
+                contSig = cs;
+            }
+            currentEnv = prev;
+        }
+
+        if (hasReturn) throw ReturnSignal{retSig.value};
+        if (hasBreak) throw BreakSignal{};
+        if (hasContinue) throw ContinueSignal{};
+        if (threw) throw ThrowSignal{thrownValue};
+
         return result;
     }
 

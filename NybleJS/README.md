@@ -1,104 +1,143 @@
-# NybleJS - Lightweight JavaScript Engine
+# NybleJS - Lightweight JavaScript Engine v0.2.0
 
-A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a tree-walking interpreter with a custom lexer, recursive-descent parser, and value system.
+A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
 ## Features Implemented
 
 ### Lexer
-- Full tokenizer: identifiers, numbers, strings, operators, keywords
+- Full tokenizer: identifiers, numbers (int, float, scientific), strings (single/double quotes)
+- Escape sequences in strings: `\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\'`
 - Line/column tracking for error reporting
-- Single/multi-line comments
+- Single-line (`//`) and multi-line (`/* */`) comments
 
 ### Parser
-- Recursive-descent parser with operator precedence
+- Recursive-descent parser with full operator precedence (14 levels)
 - Variable declarations: `let`, `const`, `var`
-- Functions: declarations, arrow functions (`() => {}`)
-- Control flow: `if/else`, `while`, `do-while`, `for`, `switch/case`
+- Functions: declarations, anonymous functions, arrow functions (`() => {}`, `param => expr`, `(params) => expr`)
+- Control flow: `if/else`, `while`, `do-while`, `for`, `switch/case/default`
 - `return`, `break`, `continue`
-- Expressions: binary, unary, ternary, assignment with compound ops (`+=`, etc.)
-- Member access: `obj.prop`, `obj[expr]`
+- Expressions: binary arithmetic, comparison, strict/loose equality, logical (`&&`, `||`), unary (`!`, `-`, `+`, `typeof`, `++`, `--`), ternary (`? :`), assignment with compound ops (`=`, `+=`, `-=`, `*=`, `/=`, `%=`)
+- Member access: `obj.prop` and `obj[expr]`
 - Call expressions
-- Array and object literals
+- Array literals with hole support
+- Object literals
 - Postfix `++`/`--`
+- `throw`, `try/catch/finally`
 
-### Interpreter
-- Tree-walking execution
+### Hybrid Engine
+
+**Tree-Walking Interpreter** (for scripts < 300 AST nodes):
 - Lexical scoping with closure support
 - JavaScript type coercion rules
-- Operators: arithmetic, comparison, strict/loose equality, logical
-- String methods: `charAt`, `indexOf`, `slice`, `toUpperCase`, `toLowerCase`, `trim`, `startsWith`, `endsWith`, `includes`, `repeat`, `length`
-- Array methods: `push`, `pop`, `shift`, `unshift`, `indexOf`, `includes`, `join`, `slice`, `splice`, `forEach`, `map`, `filter`, `reduce`, `find`, `some`, `every`, `sort`, `reverse`, `concat`, `length`
+- Signal-based control flow (return, break, continue, throw)
+- `try/catch/finally` with proper rethrow and scoping
+
+**Bytecode VM** (for scripts >= 300 AST nodes):
+- 48 opcode instruction set (stack-based)
+- Bytecode compiler with jump patching for control flow
+- Scope enter/exit for block scoping
+- Exception handling with catch/finally offset patching
+- Call stack with call frames
+- Function creation with closure capture
+
+### Garbage Collector
+- Mark-sweep collector
+- Root tracing (environment chains, temporary roots)
+- RAII pinning for GC safety
+- Memory budget based on system RAM
+
+### Value System
+- Types: Null, Undefined, Boolean, Number, String, Object, Array, Function, NativeFunction
+- JavaScript-style type coercion (`toString()`, `toNumber()`)
+- Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`)
+- Strict (`===`) and loose (`==`) equality
+- Comparison operators (`<`, `>`, `<=`, `>=`)
+- Property/index access (`getProperty`, `setProperty`, `getIndex`, `setIndex`)
+- Unary operators (`!`, `-`, `+`, `typeof`, `++`, `--`)
+
+### String Methods
+`charAt`, `indexOf`, `slice`, `toUpperCase`, `toLowerCase`, `trim`, `startsWith`, `endsWith`, `includes`, `repeat`, `length`
+
+### Array Methods
+`push`, `pop`, `shift`, `unshift`, `indexOf`, `includes`, `join`, `slice`, `splice`, `forEach`, `map`, `filter`, `reduce`, `find`, `some`, `every`, `sort`, `reverse`, `concat`, `length`
 
 ### Built-in APIs
-- `console.log`, `.error`, `.warn`, `.time`, `.timeEnd`, `.assert`
-- `Math` (all standard functions + constants)
-- `JSON.parse`, `.stringify`
-- `parseInt`, `parseFloat`, `isNaN`, `isFinite`
-- `Object.keys`, `.values`, `.entries`, `.assign`
-- `Array.isArray`, `.from`, `.of`
-- `Number` (constants + `isNaN`, `isFinite`, `isInteger`, `isSafeInteger`)
-- `String.fromCharCode`
-- `Date.now`, `.parse`
-- `Error`
-- `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
-- `encodeURI`/`decodeURI`/`encodeURIComponent`/`decodeURIComponent`
+- **console**: `log`, `error`, `warn`, `time`, `timeEnd`, `assert`
+- **Math**: All 8 constants (PI, E, LN2, LN10, LOG2E, LOG10E, SQRT2, SQRT1_2) + 22 functions (abs, floor, ceil, round, trunc, sqrt, cbrt, pow, exp, log, log2, log10, min, max, random, sin, cos, tan, asin, acos, atan, atan2, sign, hypot, clz32, imul, fround)
+- **JSON**: `parse`, `stringify`
+- **Global**: `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `typeof`, `NaN`, `Infinity`, `undefined`, `globalThis`
+- **Object**: `keys`, `values`, `entries`, `assign`, `create`, `defineProperty`
+- **Array**: `isArray`, `from`, `of`
+- **Number**: Constants (MAX_VALUE, MIN_VALUE, NaN, POSITIVE_INFINITY, NEGATIVE_INFINITY, MAX_SAFE_INTEGER, MIN_SAFE_INTEGER, EPSILON) + methods (`isNaN`, `isFinite`, `isInteger`, `isSafeInteger`)
+- **String**: `fromCharCode`, `fromCodePoint`
+- **Date**: `now`, `parse`
+- **Error**: `Error` constructor
+- **Timer stubs**: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
+- **URI stubs**: `encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`
+- **eval stub**: Returns string representation
 
 ### Runtime
-- REPL with multi-line input support
+- REPL with multi-line input support (auto-detects incomplete input)
 - File execution: `nyble script.js`
+- Makefile build system (single compilation unit)
 
 ## Not Yet Implemented
 - Prototype chain / class inheritance
 - `new` operator for constructors
 - `this` binding
 - Generators / async / await
-- `try/catch/finally`
 - `Proxy`, `Reflect`, `Symbol`
 - `Map`, `Set`, `WeakMap`, `WeakSet`
 - `TypedArray`, `DataView`
 - `Promise`
 - `import`/`export` modules
-- Garbage collection (reference counting only)
 - JIT compilation
 - `arguments` object
 - Destructuring, spread/rest operators
 - Template literals with expressions
 - Regular expressions
 - `Intl` APIs
+- `void`, `delete`, `instanceof` operators
+- Bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`)
+- `for...in` / `for...of`
+- Comma operator
+- Label statements
+- `debugger`, `with` statements
+- `RegExp` support
 
 ## Building
 
-Requirements: g++ with C++17 support (MinGW or MSYS2)
+Requirements: g++ with C++17 support (MinGW, MSYS2, or WSL)
 
 ```bash
-cd NybleJS
 make
 ```
 
 Or manually:
 ```bash
-g++ -std=c++17 -O3 -flto src/main.cpp -o nyble
+g++ -std=c++17 -O3 -flto src/main.cpp -o njs
 ```
 
 ## Usage
 
 REPL mode:
 ```bash
-./nyble
+./njs
 ```
 
 Run a file:
 ```bash
-./nyble script.js
+./njs script.js
 ```
 
 ## Performance
 
 Built with aggressive optimization flags: `-O3 -flto -s`. Uses:
 - Variant-based values (no virtual dispatch)
-- Inline functions for arithmetic operations
+- Hybrid architecture: tree-walking for small scripts, bytecode VM for large scripts
 - Header-only architecture for compiler inlining
-- Direct C++ standard library integration
+- Mark-sweep garbage collection
+- No external dependencies (apart from C++ standard library)
 
 ## Example
 
@@ -125,4 +164,13 @@ function counter() {
 let c = counter();
 console.log(c());
 console.log(c());
+
+// Try/catch
+try {
+    throw "error!";
+} catch (e) {
+    console.log(e);
+} finally {
+    console.log("done");
+}
 ```

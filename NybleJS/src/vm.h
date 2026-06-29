@@ -11,16 +11,31 @@
 
 namespace nyble {
 
+struct TryEntry {
+    size_t catchPC;
+    size_t finallyPC;
+    std::shared_ptr<Environment> savedEnv;
+    size_t stackSize;
+};
+
 struct CallFrame {
     BytecodeChunk* chunk;
     uint8_t* ip;
     std::shared_ptr<Environment> env;
+    std::vector<TryEntry> tryStack;
+    Value rethrowValue;
+};
+
+struct VMThrow {
+    Value value;
 };
 
 class VM {
 public:
     std::shared_ptr<Environment> globalEnv;
     std::vector<Value> stack;
+    bool isThrowing = false;
+    Value throwValue;
     std::mt19937 rng{std::random_device{}()};
 
     VM() {
@@ -29,12 +44,51 @@ public:
     }
 
     Value run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
-        CallFrame frame = {chunk, chunk->code.data(), env};
+        CallFrame frame = {chunk, chunk->code.data(), env, {}, Value::makeUndefined()};
         std::vector<CallFrame> frames;
         frames.push_back(frame);
 
         while (!frames.empty()) {
             auto& cf = frames.back();
+
+            // Handle pending throw
+            if (isThrowing) {
+                bool handled = false;
+                while (!cf.tryStack.empty()) {
+                    auto& te = cf.tryStack.back();
+                    if (te.catchPC != 0) {
+                        cf.env = te.savedEnv;
+                        stack.resize(te.stackSize);
+                        stack.push_back(throwValue);
+                        cf.ip = cf.chunk->code.data() + te.catchPC;
+                        isThrowing = false;
+                        handled = true;
+                        cf.tryStack.pop_back();
+                        break;
+                    }
+                    if (te.finallyPC != 0) {
+                        cf.env = te.savedEnv;
+                        stack.resize(te.stackSize);
+                        cf.ip = cf.chunk->code.data() + te.finallyPC;
+                        cf.rethrowValue = throwValue;
+                        isThrowing = false;
+                        handled = true;
+                        cf.tryStack.pop_back();
+                        break;
+                    }
+                    cf.tryStack.pop_back();
+                }
+                if (!handled) {
+                    frames.pop_back();
+                    if (frames.empty()) {
+                        stack.clear();
+                        throw VMThrow{throwValue};
+                    }
+                    continue;
+                }
+                continue;
+            }
+
             if ((size_t)(cf.ip - cf.chunk->code.data()) >= cf.chunk->code.size()) {
                 frames.pop_back();
                 if (frames.empty()) break;
@@ -259,7 +313,13 @@ public:
                         size_t start = stack.size() - argCount;
                         for (uint16_t i = 0; i < argCount; i++) args[i] = stack[start + i];
                         stack.resize(start); stack.pop_back();
-                        stack.push_back(callee.nativeVal(args));
+                        try {
+                            stack.push_back(callee.nativeVal(args));
+                        } catch (const VMThrow& vt) {
+                            stack.push_back(vt.value);
+                            isThrowing = true;
+                            throwValue = vt.value;
+                        }
                     } else if (callee.type == ValueType::Function) {
                         auto funcData = callee.funcVal;
                         std::vector<Value> args(argCount);
@@ -274,9 +334,16 @@ public:
                         if (funcData->chunk) {
                             auto savedStack = stack;
                             stack.clear();
-                            Value result = run(funcData->chunk, newEnv);
-                            stack = savedStack;
-                            stack.push_back(result);
+                            try {
+                                Value result = run(funcData->chunk, newEnv);
+                                stack = savedStack;
+                                stack.push_back(result);
+                            } catch (const VMThrow& vt) {
+                                stack = savedStack;
+                                stack.push_back(vt.value);
+                                isThrowing = true;
+                                throwValue = vt.value;
+                            }
                         } else {
                             stack.clear();
                             Interpreter sub;
@@ -288,6 +355,12 @@ public:
                                     for (const auto& s : funcData->body->stmts) result = sub.execute(s.get());
                                 }
                             } catch (const Interpreter::ReturnSignal& ret) { result = ret.value; }
+                            catch (const Interpreter::ThrowSignal& ts) {
+                                stack.push_back(ts.value);
+                                isThrowing = true;
+                                throwValue = ts.value;
+                                break;
+                            }
                             stack.push_back(result);
                         }
                     } else {
@@ -324,6 +397,37 @@ public:
                     if (cf.env->parent) cf.env = cf.env->parent;
                     break;
 
+                case OpCode::THROW: {
+                    Value val = stack.back(); stack.pop_back();
+                    isThrowing = true;
+                    throwValue = val;
+                    break;
+                }
+
+                case OpCode::RETHROW: {
+                    isThrowing = true;
+                    throwValue = cf.rethrowValue;
+                    cf.rethrowValue = Value::makeUndefined();
+                    break;
+                }
+
+                case OpCode::PUSH_TRY: {
+                    uint16_t catchOff = readShort(cf);
+                    uint16_t finallyOff = readShort(cf);
+                    TryEntry te;
+                    te.catchPC = catchOff;
+                    te.finallyPC = finallyOff;
+                    te.savedEnv = cf.env;
+                    te.stackSize = stack.size();
+                    cf.tryStack.push_back(te);
+                    break;
+                }
+
+                case OpCode::POP_TRY: {
+                    if (!cf.tryStack.empty()) cf.tryStack.pop_back();
+                    break;
+                }
+
                 case OpCode::HALT:
                     frames.clear();
                     break;
@@ -348,9 +452,17 @@ public:
             if (funcData->chunk) {
                 auto savedStack = stack;
                 stack.clear();
-                Value result = run(funcData->chunk, newEnv);
-                stack = savedStack;
-                return result;
+                try {
+                    Value result = run(funcData->chunk, newEnv);
+                    stack = savedStack;
+                    return result;
+                } catch (const VMThrow& vt) {
+                    stack = savedStack;
+                    stack.push_back(vt.value);
+                    isThrowing = true;
+                    throwValue = vt.value;
+                    return Value::makeUndefined();
+                }
             }
 
             stack.clear();
@@ -363,6 +475,12 @@ public:
                     for (const auto& s : funcData->body->stmts) result = sub.execute(s.get());
                 }
             } catch (const Interpreter::ReturnSignal& ret) { result = ret.value; }
+            catch (const Interpreter::ThrowSignal& ts) {
+                stack.push_back(ts.value);
+                isThrowing = true;
+                throwValue = ts.value;
+                return Value::makeUndefined();
+            }
             return result;
         }
         return Value::makeUndefined();

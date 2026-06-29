@@ -23,6 +23,7 @@ enum class OpCode : uint8_t {
     CALL, RETURN, MAKE_FUNCTION,
     SCOPE_ENTER, SCOPE_EXIT,
     INC_PRE, INC_POST, DEC_PRE, DEC_POST,
+    THROW, RETHROW, PUSH_TRY, POP_TRY,
     HALT
 };
 
