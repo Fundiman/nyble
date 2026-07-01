@@ -57,6 +57,7 @@ private:
     Token consume(TokenType type, const std::string& msg) {
         if (check(type)) return advance();
         error(msg);
+        if (!isAtEnd()) advance();
         return Token();
     }
 
@@ -452,7 +453,46 @@ private:
 
     std::unique_ptr<Expr> parseMember() {
         if (match(TokenType::New)) {
-            return parsePrimary();
+            auto expr = parsePrimary();
+            while (true) {
+                if (match(TokenType::Dot)) {
+                    auto mem = std::make_unique<MemberExprNode>();
+                    mem->line = previous().line;
+                    mem->object = std::move(expr);
+                    Token prop = consume(TokenType::Identifier, "Expected property");
+                    auto id = std::make_unique<IdentifierNode>();
+                    id->line = prop.line;
+                    id->name = prop.lexeme;
+                    mem->property = std::move(id);
+                    mem->computed = false;
+                    expr = std::move(mem);
+                } else if (match(TokenType::LBracket)) {
+                    auto mem = std::make_unique<MemberExprNode>();
+                    mem->line = previous().line;
+                    mem->object = std::move(expr);
+                    mem->property = parseExpr();
+                    consume(TokenType::RBracket, "Expected ']'");
+                    mem->computed = true;
+                    expr = std::move(mem);
+                } else {
+                    break;
+                }
+            }
+            if (match(TokenType::LParen)) {
+                auto newExpr = std::make_unique<NewExprNode>();
+                newExpr->line = previous().line;
+                newExpr->callee = std::move(expr);
+                while (!isAtEnd() && !check(TokenType::RParen)) {
+                    newExpr->args.push_back(parseExpr());
+                    if (!match(TokenType::Comma)) break;
+                }
+                consume(TokenType::RParen, "Expected ')'");
+                return newExpr;
+            }
+            auto newExpr = std::make_unique<NewExprNode>();
+            newExpr->line = previous().line;
+            newExpr->callee = std::move(expr);
+            return newExpr;
         }
         return parsePrimary();
     }
@@ -493,6 +533,12 @@ private:
             l->line = previous().line;
             l->value = Value::makeUndefined();
             return l;
+        }
+        if (match(TokenType::This)) {
+            auto id = std::make_unique<IdentifierNode>();
+            id->line = previous().line;
+            id->name = "this";
+            return id;
         }
         if (match(TokenType::Identifier)) {
             auto id = std::make_unique<IdentifierNode>();
@@ -547,6 +593,7 @@ private:
         }
         if (match(TokenType::Function)) {
             auto af = std::make_unique<ArrowFuncNode>();
+            af->isFuncExpr = true;
             af->line = previous().line;
             consume(TokenType::LParen, "Expected '('");
             if (!check(TokenType::RParen)) {
@@ -573,7 +620,23 @@ private:
         // Could be (expr) or (params) => body
         size_t save = pos;
 
-        if (!check(TokenType::RParen)) {
+        if (check(TokenType::RParen)) {
+            // () => - zero-param arrow function
+            size_t s2 = pos;
+            advance(); // consume )
+            if (match(TokenType::FatArrow)) {
+                auto af = std::make_unique<ArrowFuncNode>();
+                af->line = peek().line;
+                af->isExprBody = !check(TokenType::LBrace);
+                if (match(TokenType::LBrace)) {
+                    af->body = parseBlock();
+                } else {
+                    af->exprBody = parseExpr();
+                }
+                return af;
+            }
+            pos = s2; // not an arrow, restore
+        } else {
             std::vector<std::string> params;
             size_t s2 = pos;
             bool allIdentifiers = true;
@@ -600,7 +663,7 @@ private:
         }
         pos = save;
 
-        advance(); // consume (
+        // ( was already consumed by match(LParen) in parsePrimary
         auto expr = parseExpr();
         consume(TokenType::RParen, "Expected ')'");
         return expr;

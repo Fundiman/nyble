@@ -13,7 +13,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     // console
     Value consoleObj = Value::makeObj();
 
-    consoleObj.setProperty("log", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("log", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         for (size_t i = 0; i < args.size(); i++) {
             if (i > 0) std::cout << " ";
             std::cout << args[i].toString();
@@ -22,7 +22,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeUndefined();
     }));
 
-    consoleObj.setProperty("error", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("error", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         for (size_t i = 0; i < args.size(); i++) {
             if (i > 0) std::cerr << " ";
             std::cerr << args[i].toString();
@@ -31,7 +31,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeUndefined();
     }));
 
-    consoleObj.setProperty("warn", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("warn", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         for (size_t i = 0; i < args.size(); i++) {
             if (i > 0) std::cout << " ";
             std::cout << args[i].toString();
@@ -40,14 +40,14 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeUndefined();
     }));
 
-    consoleObj.setProperty("time", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("time", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         static std::unordered_map<std::string, std::chrono::steady_clock::time_point> timers;
         std::string label = args.empty() ? "default" : args[0].toString();
         timers[label] = std::chrono::steady_clock::now();
         return Value::makeUndefined();
     }));
 
-    consoleObj.setProperty("timeEnd", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("timeEnd", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         static std::unordered_map<std::string, std::chrono::steady_clock::time_point> timers;
         std::string label = args.empty() ? "default" : args[0].toString();
         auto it = timers.find(label);
@@ -60,7 +60,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeUndefined();
     }));
 
-    consoleObj.setProperty("assert", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    consoleObj.setProperty("assert", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty() || !args[0].isTruthy()) {
             std::string msg = args.size() > 1 ? args[1].toString() : "console.assert failed";
             std::cerr << "Assertion failed: " << msg << "\n";
@@ -81,142 +81,142 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     mathObj.setProperty("SQRT2", Value::makeNum(1.41421356237309504880));
     mathObj.setProperty("SQRT1_2", Value::makeNum(0.70710678118654752440));
 
-    mathObj.setProperty("abs", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("abs", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::abs(v));
     }));
 
-    mathObj.setProperty("floor", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("floor", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::floor(v));
     }));
 
-    mathObj.setProperty("ceil", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("ceil", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::ceil(v));
     }));
 
-    mathObj.setProperty("round", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("round", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::round(v));
     }));
 
-    mathObj.setProperty("trunc", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("trunc", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::trunc(v));
     }));
 
-    mathObj.setProperty("sqrt", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("sqrt", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::sqrt(v));
     }));
 
-    mathObj.setProperty("cbrt", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("cbrt", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::cbrt(v));
     }));
 
-    mathObj.setProperty("pow", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("pow", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double base = args.empty() ? 0 : args[0].toNumber();
         double exp = args.size() < 2 ? 0 : args[1].toNumber();
         return Value::makeNum(std::pow(base, exp));
     }));
 
-    mathObj.setProperty("exp", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("exp", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::exp(v));
     }));
 
-    mathObj.setProperty("log", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("log", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::log(v));
     }));
 
-    mathObj.setProperty("log2", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("log2", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::log2(v));
     }));
 
-    mathObj.setProperty("log10", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("log10", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         return Value::makeNum(std::log10(v));
     }));
 
-    mathObj.setProperty("min", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("min", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(INFINITY);
         double m = args[0].toNumber();
         for (size_t i = 1; i < args.size(); i++) m = std::min(m, args[i].toNumber());
         return Value::makeNum(m);
     }));
 
-    mathObj.setProperty("max", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("max", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(-INFINITY);
         double m = args[0].toNumber();
         for (size_t i = 1; i < args.size(); i++) m = std::max(m, args[i].toNumber());
         return Value::makeNum(m);
     }));
 
-    mathObj.setProperty("random", Value::makeNative([](const std::vector<Value>&) -> Value {
+    mathObj.setProperty("random", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
         static std::mt19937 gen(std::random_device{}());
         static std::uniform_real_distribution<double> dist(0.0, 1.0);
         return Value::makeNum(dist(gen));
     }));
 
-    mathObj.setProperty("sin", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("sin", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::sin(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("cos", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("cos", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::cos(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("tan", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("tan", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::tan(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("asin", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("asin", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::asin(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("acos", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("acos", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::acos(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("atan", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("atan", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(std::atan(args.empty() ? 0 : args[0].toNumber()));
     }));
 
-    mathObj.setProperty("atan2", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("atan2", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double y = args.empty() ? 0 : args[0].toNumber();
         double x = args.size() < 2 ? 0 : args[1].toNumber();
         return Value::makeNum(std::atan2(y, x));
     }));
 
-    mathObj.setProperty("sign", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("sign", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double v = args.empty() ? 0 : args[0].toNumber();
         if (v > 0) return Value::makeNum(1);
         if (v < 0) return Value::makeNum(-1);
         return Value::makeNum(0);
     }));
 
-    mathObj.setProperty("hypot", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("hypot", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         double sum = 0;
         for (const auto& a : args) sum += a.toNumber() * a.toNumber();
         return Value::makeNum(std::sqrt(sum));
     }));
 
-    mathObj.setProperty("clz32", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("clz32", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         unsigned int v = (unsigned int)(args.empty() ? 0 : (int)args[0].toNumber());
         return Value::makeNum((double)__builtin_clz(v));
     }));
 
-    mathObj.setProperty("imul", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("imul", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         int a = (int)(args.empty() ? 0 : args[0].toNumber());
         int b = (int)(args.size() < 2 ? 0 : args[1].toNumber());
         return Value::makeNum((double)(a * b));
     }));
 
-    mathObj.setProperty("fround", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    mathObj.setProperty("fround", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         float v = (float)(args.empty() ? 0 : args[0].toNumber());
         return Value::makeNum((double)v);
     }));
@@ -225,7 +225,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
 
     // JSON
     Value jsonObj = Value::makeObj();
-    jsonObj.setProperty("parse", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    jsonObj.setProperty("parse", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeUndefined();
         // Simple JSON string parsing (handles basic cases)
         std::string s = args[0].toString();
@@ -288,7 +288,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeUndefined();
     }));
 
-    jsonObj.setProperty("stringify", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    jsonObj.setProperty("stringify", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeUndefined();
         return Value::makeStr(args[0].toString());
     }));
@@ -296,7 +296,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     env->define("JSON", jsonObj);
 
     // Global functions
-    env->define("parseInt", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("parseInt", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(std::numeric_limits<double>::quiet_NaN());
         std::string s = args[0].toString();
         int radix = args.size() > 1 ? (int)args[1].toNumber() : 10;
@@ -307,7 +307,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeNum(r);
     }));
 
-    env->define("parseFloat", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("parseFloat", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(std::numeric_limits<double>::quiet_NaN());
         std::string s = args[0].toString();
         s.erase(0, s.find_first_not_of(" \t\n\r"));
@@ -317,30 +317,30 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         return Value::makeNum(r);
     }));
 
-    env->define("isNaN", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("isNaN", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeBool(true);
         return Value::makeBool(std::isnan(args[0].toNumber()));
     }));
 
-    env->define("isFinite", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("isFinite", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeBool(false);
         double v = args[0].toNumber();
         return Value::makeBool(std::isfinite(v));
     }));
 
-    env->define("typeof", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("typeof", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeStr("undefined");
         return args[0].typeOf();
     }));
 
     // String global
     Value stringObj = Value::makeObj();
-    stringObj.setProperty("fromCharCode", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    stringObj.setProperty("fromCharCode", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         std::string r;
         for (const auto& a : args) r += (char)(int)a.toNumber();
         return Value::makeStr(r);
     }));
-    stringObj.setProperty("fromCodePoint", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    stringObj.setProperty("fromCodePoint", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         std::string r;
         for (const auto& a : args) r += (char)(int)a.toNumber();
         return Value::makeStr(r);
@@ -357,18 +357,18 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     numberObj.setProperty("MAX_SAFE_INTEGER", Value::makeNum(9007199254740991));
     numberObj.setProperty("MIN_SAFE_INTEGER", Value::makeNum(-9007199254740991));
     numberObj.setProperty("EPSILON", Value::makeNum(2.220446049250313e-16));
-    numberObj.setProperty("isNaN", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    numberObj.setProperty("isNaN", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeBool(args.empty() ? true : std::isnan(args[0].toNumber()));
     }));
-    numberObj.setProperty("isFinite", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    numberObj.setProperty("isFinite", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeBool(!args.empty() && std::isfinite(args[0].toNumber()));
     }));
-    numberObj.setProperty("isInteger", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    numberObj.setProperty("isInteger", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeBool(false);
         double v = args[0].toNumber();
         return Value::makeBool(std::isfinite(v) && std::floor(v) == v);
     }));
-    numberObj.setProperty("isSafeInteger", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    numberObj.setProperty("isSafeInteger", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeBool(false);
         double v = args[0].toNumber();
         return Value::makeBool(std::isfinite(v) && std::floor(v) == v && std::abs(v) <= 9007199254740991);
@@ -379,17 +379,17 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     env->define("Boolean", Value::makeObj());
     // Array
     Value arrayObj = Value::makeObj();
-    arrayObj.setProperty("isArray", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    arrayObj.setProperty("isArray", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeBool(!args.empty() && args[0].type == ValueType::Array);
     }));
-    arrayObj.setProperty("from", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    arrayObj.setProperty("from", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].isArray()) {
             arr.arrVal->elements = args[0].arrVal->elements;
         }
         return arr;
     }));
-    arrayObj.setProperty("of", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    arrayObj.setProperty("of", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value arr = Value::makeArr();
         arr.arrVal->elements = args;
         return arr;
@@ -398,7 +398,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
 
     // Object
     Value objectObj = Value::makeObj();
-    objectObj.setProperty("keys", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("keys", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
             for (const auto& [key, _] : args[0].objVal->properties) {
@@ -407,7 +407,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         }
         return arr;
     }));
-    objectObj.setProperty("values", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("values", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
             for (const auto& [_, val] : args[0].objVal->properties) {
@@ -416,7 +416,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         }
         return arr;
     }));
-    objectObj.setProperty("entries", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("entries", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value arr = Value::makeArr();
         if (!args.empty() && args[0].type == ValueType::Object) {
             for (const auto& [key, val] : args[0].objVal->properties) {
@@ -428,7 +428,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         }
         return arr;
     }));
-    objectObj.setProperty("assign", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("assign", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeObj();
         Value target = args[0];
         for (size_t i = 1; i < args.size(); i++) {
@@ -440,25 +440,82 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
         }
         return target;
     }));
-    objectObj.setProperty("create", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("create", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeObj();
     }));
-    objectObj.setProperty("defineProperty", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    objectObj.setProperty("defineProperty", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.size() >= 3 && args[0].type == ValueType::Object) {
             const_cast<Value&>(args[0]).setProperty(args[1].toString(), args[2]);
         }
         return args.empty() ? Value::makeUndefined() : args[0];
     }));
+    // Object.prototype
+    Value objectProto = Value::makeObj();
+    objectProto.setProperty("toString", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
+        return Value::makeStr("[object Object]");
+    }));
+    objectProto.setProperty("hasOwnProperty", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
+        if (args.empty()) return Value::makeBool(false);
+        std::string prop = args[0].toString();
+        return Value::makeBool(true); // simplified
+    }));
+    gObjectPrototype = objectProto.objVal;
+    objectObj.setProperty("prototype", objectProto);
+
+    // Update Object.create to actually set prototype
+    objectObj.setProperty("create", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
+        Value obj = Value::makeObj();
+        if (!args.empty() && args[0].type == ValueType::Object) {
+            obj.objVal->proto = args[0].objVal;
+        }
+        return obj;
+    }));
+
     env->define("Object", objectObj);
+
+    // Function.prototype
+    Value functionProto = Value::makeObj();
+    if (gObjectPrototype) functionProto.objVal->proto = gObjectPrototype;
+    functionProto.setProperty("call", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        if (!thisVal.isFunction()) return Value::makeUndefined();
+        Value newThis = args.empty() ? Value::makeUndefined() : args[0];
+        std::vector<Value> callArgs;
+        if (args.size() > 1) callArgs.assign(args.begin() + 1, args.end());
+        if (g_callFunction) return g_callFunction(thisVal, callArgs, newThis);
+        return Value::makeUndefined();
+    }));
+    functionProto.setProperty("apply", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        if (!thisVal.isFunction()) return Value::makeUndefined();
+        Value newThis = args.empty() ? Value::makeUndefined() : args[0];
+        std::vector<Value> callArgs;
+        if (args.size() > 1 && args[1].isArray()) callArgs = args[1].arrVal->elements;
+        if (g_callFunction) return g_callFunction(thisVal, callArgs, newThis);
+        return Value::makeUndefined();
+    }));
+    functionProto.setProperty("bind", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        if (!thisVal.isFunction()) return Value::makeUndefined();
+        Value boundThis = args.empty() ? Value::makeUndefined() : args[0];
+        std::vector<Value> boundArgs;
+        if (args.size() > 1) boundArgs.assign(args.begin() + 1, args.end());
+        return Value::makeNative([thisVal, boundThis, boundArgs](const std::vector<Value>& callArgs, const Value&) -> Value {
+            std::vector<Value> allArgs = boundArgs;
+            allArgs.insert(allArgs.end(), callArgs.begin(), callArgs.end());
+            if (g_callFunction) return g_callFunction(thisVal, allArgs, boundThis);
+            return Value::makeUndefined();
+        });
+    }));
+
+    // Give Function.prototype to all functions via a global
+    gFunctionPrototype = functionProto.objVal;
 
     // Date
     Value dateObj = Value::makeObj();
-    dateObj.setProperty("now", Value::makeNative([](const std::vector<Value>&) -> Value {
+    dateObj.setProperty("now", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
         auto now = std::chrono::system_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         return Value::makeNum((double)ms);
     }));
-    dateObj.setProperty("parse", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    dateObj.setProperty("parse", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(std::numeric_limits<double>::quiet_NaN());
         return Value::makeNum((double)std::time(nullptr) * 1000);
     }));
@@ -469,7 +526,7 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
 
     // Error
     Value errorObj = Value::makeObj();
-    errorObj.setProperty("Error", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    errorObj.setProperty("Error", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         Value e = Value::makeObj();
         e.setProperty("name", Value::makeStr("Error"));
         e.setProperty("message", args.empty() ? Value::makeStr("") : args[0]);
@@ -487,42 +544,45 @@ inline void installBuiltins(std::shared_ptr<Environment> env) {
     env->define("Infinity", Value::makeNum(INFINITY), true);
     env->define("undefined", Value::makeUndefined(), true);
 
+    // Global `this` - use the global object
+    env->define("this", globalObj);
+
     // setTimeout dummy
-    env->define("setTimeout", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("setTimeout", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(0);
     }));
 
     // setInterval dummy
-    env->define("setInterval", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("setInterval", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return Value::makeNum(0);
     }));
 
     // clearTimeout
-    env->define("clearTimeout", Value::makeNative([](const std::vector<Value>&) -> Value {
+    env->define("clearTimeout", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
         return Value::makeUndefined();
     }));
 
     // clearInterval
-    env->define("clearInterval", Value::makeNative([](const std::vector<Value>&) -> Value {
+    env->define("clearInterval", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
         return Value::makeUndefined();
     }));
 
     // encodeURI / decodeURI
-    env->define("encodeURI", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("encodeURI", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return args.empty() ? Value::makeStr("") : Value::makeStr(args[0].toString());
     }));
-    env->define("decodeURI", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("decodeURI", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return args.empty() ? Value::makeStr("") : Value::makeStr(args[0].toString());
     }));
-    env->define("encodeURIComponent", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("encodeURIComponent", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return args.empty() ? Value::makeStr("") : Value::makeStr(args[0].toString());
     }));
-    env->define("decodeURIComponent", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("decodeURIComponent", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return args.empty() ? Value::makeStr("") : Value::makeStr(args[0].toString());
     }));
 
     // eval - just returns the expression
-    env->define("eval", Value::makeNative([](const std::vector<Value>& args) -> Value {
+    env->define("eval", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         return args.empty() ? Value::makeUndefined() : Value::makeStr(args[0].toString());
     }));
 }

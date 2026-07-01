@@ -12,7 +12,7 @@ enum class ASTType {
     Return, Break, Continue, Switch, Throw, Try,
     // Expressions
     Binary, Unary, Call, Member, Identifier, Literal,
-    ArrayLit, ObjectLit, Assignment, Conditional, ArrowFunc
+    ArrayLit, ObjectLit, Assignment, Conditional, ArrowFunc, New
 };
 
 struct ASTNode {
@@ -94,10 +94,16 @@ struct ArrowFuncNode : Expr {
     std::unique_ptr<Stmt> body;
     bool isExprBody = false;
     std::unique_ptr<Expr> exprBody;
+    bool isFuncExpr = false;
+};
+
+struct NewExprNode : Expr {
+    NewExprNode() { type = ASTType::New; }
+    std::unique_ptr<Expr> callee;
+    std::vector<std::unique_ptr<Expr>> args;
 };
 
 struct Program {
     std::vector<std::unique_ptr<Stmt>> stmts;
 };
-
 }

@@ -102,6 +102,24 @@ inline void GCFunction::trace(std::vector<GCHeader*>& worklist) {
             }
         }
     }
+    for (auto& [key, val] : properties) {
+        GCHeader* h = nullptr;
+        switch (val.type) {
+            case ValueType::String: h = val.strVal; break;
+            case ValueType::Object: h = val.objVal; break;
+            case ValueType::Array:  h = val.arrVal; break;
+            case ValueType::Function: h = val.funcVal; break;
+            default: continue;
+        }
+        if (h && !h->marked) {
+            h->marked = true;
+            worklist.push_back(h);
+        }
+    }
+    if (proto && !proto->marked) {
+        proto->marked = true;
+        worklist.push_back(proto);
+    }
 }
 
 }

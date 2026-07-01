@@ -35,7 +35,10 @@ enum class ValueType {
     NativeFunction
 };
 
-using NativeFn = std::function<class Value(const std::vector<class Value>&)>;
+using NativeFn = std::function<class Value(const std::vector<class Value>&, const class Value&)>;
+
+// Global call dispatcher for native functions that need to invoke other functions
+inline std::function<class Value(const class Value&, const std::vector<class Value>&, const class Value&)> g_callFunction;
 
 class Value {
 public:
@@ -109,14 +112,18 @@ public:
 
 struct GCObject : GCHeader {
     std::unordered_map<std::string, Value> properties;
+    GCObject* proto = nullptr;
     GCObject() : GCHeader(GCType::Object) {}
     void trace(std::vector<GCHeader*>& worklist) override;
     size_t approxSize() const override { return sizeof(GCObject) + properties.size() * 64; }
 };
+inline GCObject* gObjectPrototype = nullptr;
+inline GCObject* gFunctionPrototype = nullptr;
 
 struct GCArray : GCHeader {
     std::vector<Value> elements;
     std::unordered_map<std::string, Value> properties;
+    GCObject* proto = nullptr;
     GCArray() : GCHeader(GCType::Array) {}
     void trace(std::vector<GCHeader*>& worklist) override;
     size_t approxSize() const override { return sizeof(GCArray) + elements.capacity() * sizeof(Value) + properties.size() * 64; }
@@ -128,7 +135,10 @@ struct GCFunction : GCHeader {
     const BlockStmt* body;
     Expr* exprBody;
     BytecodeChunk* chunk;
-    GCFunction() : GCHeader(GCType::Function), body(nullptr), exprBody(nullptr), chunk(nullptr) {}
+    std::unordered_map<std::string, Value> properties;
+    GCObject* proto = nullptr;
+    bool isArrow = false;
+    GCFunction() : GCHeader(GCType::Function), body(nullptr), exprBody(nullptr), chunk(nullptr), isArrow(false) {}
     void trace(std::vector<GCHeader*>& worklist) override;
     size_t approxSize() const override { return sizeof(GCFunction) + params.size() * 32; }
 };
@@ -215,11 +225,33 @@ inline Value Value::getProperty(const std::string& name) const {
     if (type == ValueType::Object && objVal) {
         auto it = objVal->properties.find(name);
         if (it != objVal->properties.end()) return it->second;
+        GCObject* p = objVal->proto;
+        while (p) {
+            auto it2 = p->properties.find(name);
+            if (it2 != p->properties.end()) return it2->second;
+            p = p->proto;
+        }
     }
     if (type == ValueType::Array && arrVal) {
         if (name == "length") return Value::makeNum((double)arrVal->elements.size());
         auto it = arrVal->properties.find(name);
         if (it != arrVal->properties.end()) return it->second;
+        GCObject* p = arrVal->proto;
+        while (p) {
+            auto it2 = p->properties.find(name);
+            if (it2 != p->properties.end()) return it2->second;
+            p = p->proto;
+        }
+    }
+    if (type == ValueType::Function && funcVal) {
+        auto it = funcVal->properties.find(name);
+        if (it != funcVal->properties.end()) return it->second;
+        GCObject* p = funcVal->proto;
+        while (p) {
+            auto it2 = p->properties.find(name);
+            if (it2 != p->properties.end()) return it2->second;
+            p = p->proto;
+        }
     }
     return Value::makeUndefined();
 }
@@ -229,6 +261,8 @@ inline void Value::setProperty(const std::string& name, const Value& val) {
         objVal->properties[name] = val;
     } else if (type == ValueType::Array && arrVal) {
         arrVal->properties[name] = val;
+    } else if (type == ValueType::Function && funcVal) {
+        funcVal->properties[name] = val;
     }
 }
 
@@ -359,6 +393,10 @@ inline void GCObject::trace(std::vector<GCHeader*>& worklist) {
             worklist.push_back(h);
         }
     }
+    if (proto && !proto->marked) {
+        proto->marked = true;
+        worklist.push_back(proto);
+    }
 }
 
 inline void GCArray::trace(std::vector<GCHeader*>& worklist) {
@@ -389,6 +427,10 @@ inline void GCArray::trace(std::vector<GCHeader*>& worklist) {
             h->marked = true;
             worklist.push_back(h);
         }
+    }
+    if (proto && !proto->marked) {
+        proto->marked = true;
+        worklist.push_back(proto);
     }
 }
 

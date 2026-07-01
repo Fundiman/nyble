@@ -73,6 +73,12 @@ size_t countExpr(const nyble::Expr* expr) {
             n += countStmt(a->body.get()) + countExpr(a->exprBody.get());
             break;
         }
+        case nyble::ASTType::New: {
+            auto* n2 = static_cast<const nyble::NewExprNode*>(expr);
+            n += countExpr(n2->callee.get());
+            for (auto& a : n2->args) n += countExpr(a.get());
+            break;
+        }
         case nyble::ASTType::Identifier:
         case nyble::ASTType::Literal:
             break;

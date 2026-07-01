@@ -14,7 +14,7 @@ enum class TokenType {
     Let, Const, Var, Function, If, Else, While, For, Do,
     Return, Break, Continue, Switch, Case, Default,
     True, False, Null, Undefined, Typeof, New, This,
-    Class, Constructor, Of, In, VarArg,
+    Class, Of, In, VarArg,
     Try, Catch, Finally, Throw, ConstLet, Arrow,
 
     // Operators
@@ -192,7 +192,7 @@ private:
             {"new", TokenType::New},
             {"this", TokenType::This},
             {"class", TokenType::Class},
-            {"constructor", TokenType::Constructor},
+
             {"try", TokenType::Try},
             {"catch", TokenType::Catch},
             {"finally", TokenType::Finally},

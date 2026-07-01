@@ -277,6 +277,7 @@ struct Compiler {
             case ASTType::Assignment: compileAssign(static_cast<AssignNode*>(expr)); break;
             case ASTType::Conditional: compileConditional(static_cast<ConditionalNode*>(expr)); break;
             case ASTType::ArrowFunc: compileArrow(static_cast<ArrowFuncNode*>(expr)); break;
+            case ASTType::New: compileNew(static_cast<NewExprNode*>(expr)); break;
             default: emit(OpCode::PUSH_UNDEFINED);
         }
     }
@@ -335,10 +336,29 @@ struct Compiler {
     }
 
     void compileCall(CallExprNode* expr) {
-        compileExpr(expr->callee.get());
-        for (auto& a : expr->args) compileExpr(a.get());
-        emit(OpCode::CALL);
-        emitShort((uint16_t)expr->args.size());
+        if (expr->callee->type == ASTType::Member) {
+            auto mem = static_cast<MemberExprNode*>(expr->callee.get());
+            compileExpr(mem->object.get());
+            emit(OpCode::DUP);
+            if (!mem->computed && mem->property->type == ASTType::Identifier) {
+                auto id = static_cast<IdentifierNode*>(mem->property.get());
+                size_t s = makeString(id->name);
+                emit(OpCode::GET_PROP);
+                emitShort((uint16_t)s);
+            } else {
+                compileExpr(mem->property.get());
+                emit(OpCode::GET_INDEX);
+            }
+            for (auto& a : expr->args) compileExpr(a.get());
+            emit(OpCode::CALL_METHOD);
+            emitShort((uint16_t)expr->args.size());
+        } else {
+            compileExpr(expr->callee.get());
+            emit(OpCode::PUSH_UNDEFINED);
+            for (auto& a : expr->args) compileExpr(a.get());
+            emit(OpCode::CALL);
+            emitShort((uint16_t)expr->args.size());
+        }
     }
 
     void compileMember(MemberExprNode* expr) {
@@ -443,6 +463,13 @@ struct Compiler {
         patchJump(endJ);
     }
 
+    void compileNew(NewExprNode* expr) {
+        compileExpr(expr->callee.get());
+        for (auto& a : expr->args) compileExpr(a.get());
+        emit(OpCode::NEW);
+        emitShort((uint16_t)expr->args.size());
+    }
+
     void compileArrow(ArrowFuncNode* expr) {
         auto funcChunk = new BytecodeChunk();
         funcChunk->params = expr->params;
@@ -454,7 +481,7 @@ struct Compiler {
         fc.emit(OpCode::RETURN);
 
         size_t idx = chunk->addFunc(funcChunk);
-        emit(OpCode::MAKE_FUNCTION);
+        emit(OpCode::MAKE_ARROW_FUNCTION);
         emitShort((uint16_t)idx);
     }
 };

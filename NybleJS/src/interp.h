@@ -21,9 +21,12 @@ public:
         globalEnv = std::make_shared<Environment>();
         currentEnv = globalEnv;
         installBuiltins(globalEnv);
+        g_callFunction = [this](const Value& fn, const std::vector<Value>& args, const Value& thisArg) -> Value {
+            return callValue(fn, args, thisArg);
+        };
     }
 
-    Value callValue(const Value& fn, const std::vector<Value>& args);
+    Value callValue(const Value& fn, const std::vector<Value>& args, Value thisArg = Value::makeUndefined());
 
     Value evaluate(const Program& prog) {
         Value result;
@@ -68,6 +71,7 @@ public:
             case ASTType::Assignment: return evalAssign(static_cast<AssignNode*>(expr));
             case ASTType::Conditional: return evalConditional(static_cast<ConditionalNode*>(expr));
             case ASTType::ArrowFunc: return evalArrow(static_cast<ArrowFuncNode*>(expr));
+            case ASTType::New: return evalNew(static_cast<NewExprNode*>(expr));
             default: return Value::makeUndefined();
         }
     }
@@ -102,6 +106,11 @@ private:
         funcData->params = decl->params;
         funcData->body = decl->body.get();
         funcData->closure = currentEnv;
+        if (gFunctionPrototype) funcData->proto = gFunctionPrototype;
+        Value proto = Value::makeObj();
+        if (gObjectPrototype) proto.objVal->proto = gObjectPrototype;
+        proto.objVal->properties["constructor"] = Value::makeFunc(funcData);
+        funcData->properties["prototype"] = proto;
         currentEnv->define(decl->name, Value::makeFunc(funcData));
         return Value::makeFunc(funcData);
     }
@@ -295,8 +304,8 @@ private:
         if (expr->op == ">") return left.cmp(right, ">");
         if (expr->op == "<=") return left.cmp(right, "<=");
         if (expr->op == ">=") return left.cmp(right, ">=");
-        if (expr->op == "&&") return Value::makeBool(left.isTruthy() && right.isTruthy());
-        if (expr->op == "||") return Value::makeBool(left.isTruthy() || right.isTruthy());
+        if (expr->op == "&&") return left.isTruthy() ? right : left;
+        if (expr->op == "||") return left.isTruthy() ? left : right;
         return Value::makeUndefined();
     }
 
@@ -328,7 +337,14 @@ private:
         Value callee = evaluateExpr(expr->callee.get());
         std::vector<Value> args;
         for (const auto& arg : expr->args) args.push_back(evaluateExpr(arg.get()));
-        return callValue(callee, args);
+        Value thisArg;
+        if (expr->callee->type == ASTType::Member) {
+            auto mem = static_cast<MemberExprNode*>(expr->callee.get());
+            thisArg = evaluateExpr(mem->object.get());
+        } else {
+            thisArg = Value::makeUndefined();
+        }
+        return callValue(callee, args, thisArg);
     }
 
     Value evalMember(MemberExprNode* expr) {
@@ -343,18 +359,18 @@ private:
         if (obj.type == ValueType::String) {
             if (propName == "length") return Value::makeNum((double)obj.strVal->str.size());
             if (propName == "charAt")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&) -> Value {
                     int i = a.empty()?0:(int)a[0].toNumber();
                     if(i<0||i>=(int)str.size()) return Value::makeStr("");
                     return Value::makeStr(std::string(1,str[i]));
                 });
             if (propName == "indexOf")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&) -> Value {
                     auto p = str.find(a.empty()?"":a[0].toString());
                     return Value::makeNum(p==std::string::npos?-1.0:(double)p);
                 });
             if (propName == "slice")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a) -> Value {
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&) -> Value {
                     int s = a.empty()?0:(int)a[0].toNumber();
                     int e = a.size()<2?(int)str.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)str.size()+s);
@@ -363,25 +379,25 @@ private:
                     return Value::makeStr(str.substr(s,e-s));
                 });
             if (propName == "toUpperCase")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&, const Value&)->Value{
                     std::string r=str; std::transform(r.begin(),r.end(),r.begin(),::toupper); return Value::makeStr(r);});
             if (propName == "toLowerCase")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&, const Value&)->Value{
                     std::string r=str; std::transform(r.begin(),r.end(),r.begin(),::tolower); return Value::makeStr(r);});
             if (propName == "trim")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>&, const Value&)->Value{
                     std::string s=str; s.erase(0,s.find_first_not_of(" \t\n\r")); s.erase(s.find_last_not_of(" \t\n\r")+1); return Value::makeStr(s);});
             if (propName == "startsWith")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&)->Value{
                     return Value::makeBool(str.find(a.empty()?"":a[0].toString())==0);});
             if (propName == "endsWith")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&)->Value{
                     std::string s=a.empty()?"":a[0].toString(); return Value::makeBool(str.size()>=s.size()&&str.substr(str.size()-s.size())==s);});
             if (propName == "includes")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&)->Value{
                     return Value::makeBool(str.find(a.empty()?"":a[0].toString())!=std::string::npos);});
             if (propName == "repeat")
-                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a)->Value{
+                return Value::makeNative([str=obj.strVal->str](const std::vector<Value>& a, const Value&)->Value{
                     int c=a.empty()?0:(int)a[0].toNumber(); if(c<=0)return Value::makeStr("");
                     std::string r; r.reserve(str.size()*c); for(int i=0;i<c;i++)r+=str; return Value::makeStr(r);});
         }
@@ -389,39 +405,39 @@ private:
         if (obj.type == ValueType::Array) {
             if (propName == "length") return Value::makeNum((double)obj.arrVal->elements.size());
             if (propName == "push")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                     for(const auto& v:a)arrPtr->elements.push_back(v); return Value::makeNum((double)arrPtr->elements.size());});
             if (propName == "pop")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
                     if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
             if (propName == "shift")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
                     if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
             if (propName == "unshift")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                     arrPtr->elements.insert(arrPtr->elements.begin(),a.begin(),a.end()); return Value::makeNum((double)arrPtr->elements.size());});
             if (propName == "indexOf")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty())return Value::makeNum(-1);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value eq=arrPtr->elements[i].eq(a[0],true);if(eq.boolVal)return Value::makeNum((double)i);}
                     return Value::makeNum(-1);});
             if (propName == "includes")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty())return Value::makeBool(false);
                     for(const auto& e:arrPtr->elements){Value eq=e.eq(a[0],true);if(eq.boolVal)return Value::makeBool(true);}
                     return Value::makeBool(false);});
             if (propName == "join")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     std::string sep=a.empty()?",":a[0].toString(); std::string r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){if(i>0)r+=sep;r+=arrPtr->elements[i].toString();}
                     return Value::makeStr(r);});
             if (propName == "slice")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     int s=a.empty()?0:(int)a[0].toNumber(); int e=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); if(e<0)e=std::max(0,(int)arrPtr->elements.size()+e);
                     Value r=Value::makeArr(); for(int i=s;i<e&&i<(int)arrPtr->elements.size();i++)r.arrVal->elements.push_back(arrPtr->elements[i]); return r;});
             if (propName == "splice")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a) mutable->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                     int s=a.empty()?0:(int)a[0].toNumber(); int dc=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
                     if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); dc=std::min(dc,(int)arrPtr->elements.size()-s);
                     Value rem=Value::makeArr(); auto it=arrPtr->elements.begin()+s;
@@ -430,7 +446,7 @@ private:
                     for(size_t i=2;i<a.size();i++)arrPtr->elements.insert(arrPtr->elements.begin()+s+(i-2),a[i]);
                     return rem;});
             if (propName == "forEach")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
@@ -438,7 +454,7 @@ private:
                         callValue(a[0], ca);}
                     return Value::makeUndefined();});
             if (propName == "map")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     Value r=Value::makeArr(); if(a.empty()||!a[0].isFunction())return r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
@@ -446,7 +462,7 @@ private:
                         r.arrVal->elements.push_back(callValue(a[0], ca));}
                     return r;});
             if (propName == "filter")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     Value r=Value::makeArr(); if(a.empty()||!a[0].isFunction())return r;
                     for(size_t i=0;i<arrPtr->elements.size();i++){
                         std::vector<Value> ca={arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()};
@@ -454,7 +470,7 @@ private:
                         Value rv=callValue(a[0], ca); if(rv.isTruthy())r.arrVal->elements.push_back(arrPtr->elements[i]);}
                     return r;});
             if (propName == "reduce")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     bool hasInit=a.size()>1; Value acc=hasInit?a[1]:Value::makeUndefined();
                     size_t si=hasInit?0:1; if(!hasInit&&!arrPtr->elements.empty())acc=arrPtr->elements[0];
@@ -462,30 +478,30 @@ private:
                         acc=callValue(a[0], {acc,arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});
                     return acc;});
             if (propName == "find")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeUndefined();
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(r.isTruthy())return arrPtr->elements[i];}
                     return Value::makeUndefined();});
             if (propName == "some")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeBool(false);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(r.isTruthy())return Value::makeBool(true);}
                     return Value::makeBool(false);});
             if (propName == "every")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())return Value::makeBool(false);
                     for(size_t i=0;i<arrPtr->elements.size();i++){Value r=callValue(a[0],{arrPtr->elements[i],Value::makeNum((double)i),Value::makeArr()});if(!r.isTruthy())return Value::makeBool(false);}
                     return Value::makeBool(true);});
             if (propName == "sort")
-                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([this, arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     if(a.empty()||!a[0].isFunction())std::sort(arrPtr->elements.begin(),arrPtr->elements.end(),[](const Value& x,const Value& y){return x.toNumber()<y.toNumber();});
                     else std::sort(arrPtr->elements.begin(),arrPtr->elements.end(),[this,&a](const Value& x,const Value& y){return callValue(a[0],{x,y}).toNumber()<0;});
                     Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements; return r;});
             if (propName == "reverse")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&)->Value{
                     std::reverse(arrPtr->elements.begin(),arrPtr->elements.end()); Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements; return r;});
             if (propName == "concat")
-                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a)->Value{
+                return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                     Value r=Value::makeArr(); r.arrVal->elements=arrPtr->elements;
                     for(const auto& v:a){if(v.isArray())r.arrVal->elements.insert(r.arrVal->elements.end(),v.arrVal->elements.begin(),v.arrVal->elements.end());else r.arrVal->elements.push_back(v);}
                     return r;});
@@ -497,6 +513,7 @@ private:
             if(end==propName.c_str()+propName.length())return obj.getIndex((size_t)idx);
             return obj.getProperty(propName);
         }
+        if (obj.type == ValueType::Function) return obj.getProperty(propName);
         return Value::makeUndefined();
     }
 
@@ -515,6 +532,7 @@ private:
 
     Value evalObject(ObjectLitNode* expr) {
         Value obj = Value::makeObj();
+        if (gObjectPrototype) obj.objVal->proto = gObjectPrototype;
         for (const auto& [key, valExpr] : expr->properties) {
             obj.setProperty(key, evaluateExpr(valExpr.get()));
         }
@@ -536,7 +554,12 @@ private:
         if (expr->target->type == ASTType::Member) {
             auto mem = static_cast<MemberExprNode*>(expr->target.get());
             Value obj = evaluateExpr(mem->object.get());
-            std::string propName = evaluateExpr(mem->property.get()).toString();
+            std::string propName;
+            if (!mem->computed && mem->property->type == ASTType::Identifier) {
+                propName = static_cast<IdentifierNode*>(mem->property.get())->name;
+            } else {
+                propName = evaluateExpr(mem->property.get()).toString();
+            }
             if (expr->op == "=") { obj.setProperty(propName, val); return val; }
             Value existing = obj.getProperty(propName);
             if (expr->op == "+=") { obj.setProperty(propName, existing.add(val)); return val; }
@@ -555,6 +578,13 @@ private:
         auto funcData = gHeap.allocate<GCFunction>();
         funcData->params = expr->params;
         funcData->closure = currentEnv;
+        funcData->isArrow = !expr->isFuncExpr;
+        if (gFunctionPrototype) funcData->proto = gFunctionPrototype;
+
+        Value proto = Value::makeObj();
+        if (gObjectPrototype) proto.objVal->proto = gObjectPrototype;
+        proto.objVal->properties["constructor"] = Value::makeFunc(funcData);
+        funcData->properties["prototype"] = proto;
 
         if (expr->isExprBody && expr->exprBody) {
             funcData->exprBody = expr->exprBody.get();
@@ -565,14 +595,36 @@ private:
         }
         return Value::makeFunc(funcData);
     }
+
+    Value evalNew(NewExprNode* expr) {
+        Value constructor = evaluateExpr(expr->callee.get());
+        std::vector<Value> args;
+        for (const auto& arg : expr->args) args.push_back(evaluateExpr(arg.get()));
+
+        Value obj = Value::makeObj();
+        Value protoVal = constructor.getProperty("prototype");
+        if (protoVal.type == ValueType::Object) {
+            obj.objVal->proto = protoVal.objVal;
+        }
+
+        Value result = callValue(constructor, args, obj);
+
+        if (result.type == ValueType::Object || result.type == ValueType::Array || result.type == ValueType::Function) {
+            return result;
+        }
+        return obj;
+    }
 };
 
-inline Value Interpreter::callValue(const Value& fn, const std::vector<Value>& args) {
-    if (fn.type == ValueType::NativeFunction) return fn.nativeVal(args);
+inline Value Interpreter::callValue(const Value& fn, const std::vector<Value>& args, Value thisArg) {
+    if (fn.type == ValueType::NativeFunction) return fn.nativeVal(args, thisArg);
     if (fn.type == ValueType::Function) {
         auto funcData = fn.funcVal;
         auto prev = currentEnv;
         currentEnv = funcData->closure->createChild();
+        if (!funcData->isArrow) {
+            currentEnv->define("this", thisArg);
+        }
         for (size_t i = 0; i < funcData->params.size(); i++) {
             currentEnv->define(funcData->params[i], i < args.size() ? args[i] : Value::makeUndefined());
         }
