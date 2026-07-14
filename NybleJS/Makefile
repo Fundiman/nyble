@@ -10,7 +10,7 @@ all: njs
 njs: $(OBJ)
 	$(CXX) $(LDFLAGS) -o njs $(OBJ)
 
-$(OBJ): $(SRC) src/value.h src/lexer.h src/ast.h src/parser.h src/env.h src/interp.h src/builtins.h src/gc.h src/bytecode.h src/compiler.h src/vm.h
+$(OBJ): $(SRC) src/nyblejs.h src/value.h src/lexer.h src/ast.h src/parser.h src/env.h src/interp.h src/builtins.h src/gc.h src/bytecode.h src/compiler.h src/vm.h src/quotes.h
 	$(CXX) $(CXXFLAGS) -c $(SRC) -o $(OBJ)
 
 clean:

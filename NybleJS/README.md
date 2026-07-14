@@ -144,6 +144,31 @@ Run a file:
 ./njs script.js
 ```
 
+### Command-Line Options
+
+| Option | Description |
+|---|---|
+| `-help`, `--help` | Show help message and exit |
+| `-version`, `--version` | Show version info and exit |
+| `-Xmx<size>` | Set GC max memory budget (e.g. `256m`, `1g`) |
+| `-engine <type>`, `--engine <type>` | Force execution engine: `tree`, `vm`, or `jit` |
+| `-c <code>` | Execute inline JavaScript code |
+| `--meow` | Display an ASCII cat with a random quote |
+| `-D<key>=<value>` | Set a custom property |
+
+Engine types:
+- `tree` — Tree-walking interpreter only (fast startup, good for small scripts)
+- `vm` — Bytecode VM only (better for large/complex scripts)
+- `jit` — JIT compiler (not yet implemented, errors out)
+
+Examples:
+```bash
+./njs -engine tree script.js
+./njs -Xmx512m script.js
+./njs --engine vm -Xmx1g script.js
+./njs -Dname=myapp -Ddebug=true script.js
+```
+
 ## Performance
 
 Built with aggressive optimization flags: `-O3 -flto -s`. Uses:
