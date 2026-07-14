@@ -1,4 +1,4 @@
-# NybleJS - Lightweight JavaScript Engine v0.2.0
+# NybleJS - Lightweight JavaScript Engine v0.3.1 (AttentionIsAllYouNeed Biryani)
 
 A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
@@ -91,9 +91,15 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - **eval stub**: Returns string representation
 
 ### Runtime
-- REPL with multi-line input support (auto-detects incomplete input)
-- File execution: `nyble script.js`
-- Makefile build system (single compilation unit)
+- REPL with syntax highlighting (as-you-type via raw terminal input)
+- REPL keybindings: arrow keys, Home/End, Ctrl+A/E/U/K/W/D/C
+- Multi-line input support (auto-detects incomplete input)
+- ANSI colored output on all built-in messages (errors, help, version, REPL)
+- Java-style CLI options (`-Xmx`, `-engine`, `-c`, `-Dkey=value`)
+- `--meow` flag: ASCII cat with a random quote or cat fact
+- Single-header include (`src/nyblejs.h`) for embedding as a library
+- File execution: `njs script.js`
+- Makefile build system (multi-file compilation)
 
 ## Not Yet Implemented
 - Generators / async / await
@@ -129,12 +135,12 @@ make
 
 Or manually:
 ```bash
-g++ -std=c++17 -O3 -flto src/main.cpp -o njs
+g++ -std=c++17 -O3 -flto src/*.cpp -o njs
 ```
 
 ## Usage
 
-REPL mode:
+REPL mode (with syntax highlighting):
 ```bash
 ./njs
 ```
@@ -153,7 +159,7 @@ Run a file:
 | `-Xmx<size>` | Set GC max memory budget (e.g. `256m`, `1g`) |
 | `-engine <type>`, `--engine <type>` | Force execution engine: `tree`, `vm`, or `jit` |
 | `-c <code>` | Execute inline JavaScript code |
-| `--meow` | Display an ASCII cat with a random quote |
+| `--meow` | Display an ASCII cat with a random quote or cat fact |
 | `-D<key>=<value>` | Set a custom property |
 
 Engine types:
@@ -167,14 +173,38 @@ Examples:
 ./njs -Xmx512m script.js
 ./njs --engine vm -Xmx1g script.js
 ./njs -Dname=myapp -Ddebug=true script.js
+./njs -c "console.log(42)"
+./njs --meow
 ```
+
+### REPL Keybindings
+
+| Key | Action |
+|---|---|
+| Left / Right | Move cursor |
+| Home / End | Jump to start / end of line |
+| Ctrl+A | Start of line |
+| Ctrl+E | End of line |
+| Ctrl+W | Delete word backward |
+| Ctrl+U | Delete from cursor to start |
+| Ctrl+K | Delete from cursor to end |
+| Ctrl+C | Cancel current line |
+| Ctrl+D | Exit REPL |
+
+### Embedding as a Library
+
+Include the single header for use in other C++ projects:
+```cpp
+#include "src/nyblejs.h"
+```
+Link against the compiled object files or compile `src/*.cpp` alongside your project.
 
 ## Performance
 
 Built with aggressive optimization flags: `-O3 -flto -s`. Uses:
 - Variant-based values (no virtual dispatch)
 - Hybrid architecture: tree-walking for small scripts, bytecode VM for large scripts
-- Header-only architecture for compiler inlining
+- Header/source split architecture for faster incremental builds
 - Mark-sweep garbage collection
 - No external dependencies (apart from C++ standard library)
 
@@ -244,3 +274,16 @@ function greet(greeting) {
 }
 console.log(greet.call({name: "World"}, "Hello"));
 ```
+
+## Contributing
+
+### Versioning
+
+NybleJS follows [Semantic Versioning](https://semver.org/). The version number is stored in `src/main.cpp` as `NYBLE_VERSION` and the version name as `NYBLE_VERSION_NAME`.
+
+- **Major versions** (e.g. v0.3.0 → v1.0.0) are named after famous CS/AI research papers or landmark books.
+  - Examples: "Attention Is All You Need", "The Cathedral and the Bazaar", "Structure and Interpretation of Computer Programs"
+- **Minor versions** (e.g. v0.3.0 → v0.4.0) add features or significant changes. Minor versions receive a second name attached to the major name. This name must be a food from somewhere in the world — no sweets or desserts (to avoid sounding like an Android clone). If food names ever run out, animals are allowed as a fallback.
+- **Patch versions** (e.g. v0.3.0 → v0.3.1) are bug fixes and small improvements.
+
+Every commit that changes engine behavior **must bump the version by 0.0.1** (patch bump).

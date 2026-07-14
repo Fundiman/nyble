@@ -75,7 +75,7 @@ public:
         try {
             obj = new T(std::forward<Args>(args)...);
         } catch (const std::bad_alloc&) {
-            throw std::runtime_error("Out of memory: GC allocation limit reached");
+            throw std::runtime_error("Out of memory");
         }
         size_t est = obj->approxSize();
         checkBudget(est);

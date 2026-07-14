@@ -50,7 +50,7 @@ public:
     Value set(const std::string& name, const Value& val) {
         if (values.find(name) != values.end()) {
             if (isConstant(name)) {
-                throw std::runtime_error("Cannot assign to constant '" + name + "'");
+                throw NybleRuntimeError(Value::makeTypeError("Assignment to constant variable '" + name + "'"));
             }
             values[name] = val;
             return val;
@@ -84,42 +84,5 @@ public:
         }
     }
 };
-
-inline void GCFunction::trace(std::vector<GCHeader*>& worklist) {
-    if (closure) {
-        for (auto& [key, val] : closure->values) {
-            GCHeader* h = nullptr;
-            switch (val.type) {
-                case ValueType::String: h = val.strVal; break;
-                case ValueType::Object: h = val.objVal; break;
-                case ValueType::Array:  h = val.arrVal; break;
-                case ValueType::Function: h = val.funcVal; break;
-                default: continue;
-            }
-            if (h && !h->marked) {
-                h->marked = true;
-                worklist.push_back(h);
-            }
-        }
-    }
-    for (auto& [key, val] : properties) {
-        GCHeader* h = nullptr;
-        switch (val.type) {
-            case ValueType::String: h = val.strVal; break;
-            case ValueType::Object: h = val.objVal; break;
-            case ValueType::Array:  h = val.arrVal; break;
-            case ValueType::Function: h = val.funcVal; break;
-            default: continue;
-        }
-        if (h && !h->marked) {
-            h->marked = true;
-            worklist.push_back(h);
-        }
-    }
-    if (proto && !proto->marked) {
-        proto->marked = true;
-        worklist.push_back(proto);
-    }
-}
 
 }
