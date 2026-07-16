@@ -1,4 +1,4 @@
-# NybleJS - Lightweight JavaScript Engine v0.3.1 (AttentionIsAllYouNeed Biryani)
+# NybleJS - Lightweight JavaScript Engine v0.4 (AttentionIsAllYouNeed)
 
 A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
@@ -279,11 +279,13 @@ console.log(greet.call({name: "World"}, "Hello"));
 
 ### Versioning
 
-NybleJS follows [Semantic Versioning](https://semver.org/). The version number is stored in `src/main.cpp` as `NYBLE_VERSION` and the version name as `NYBLE_VERSION_NAME`.
+NybleJS uses a two-level versioning system (major.minor). The version number is stored in `src/main.cpp` as `NYBLE_VERSION` and the version name as `NYBLE_VERSION_NAME`.
 
-- **Major versions** (e.g. v0.3.0 → v1.0.0) are named after famous CS/AI research papers or landmark books.
-  - Examples: "Attention Is All You Need", "The Cathedral and the Bazaar", "Structure and Interpretation of Computer Programs"
-- **Minor versions** (e.g. v0.3.0 → v0.4.0) add features or significant changes. Minor versions receive a second name attached to the major name. This name must be a food from somewhere in the world — no sweets or desserts (to avoid sounding like an Android clone). If food names ever run out, animals are allowed as a fallback.
-- **Patch versions** (e.g. v0.3.0 → v0.3.1) are bug fixes and small improvements.
+- **Major versions** (e.g. v0.4 → v1.0) are named. Names alternate between famous CS/AI research papers and foods from somewhere in the world — no sweets or desserts (to avoid sounding like an Android clone).
+  - v0: "Attention Is All You Need" (paper)
+  - v1: [food]
+  - v2: [paper]
+  - ...
+- **Minor versions** (e.g. v0.4 → v0.5) add features, significant changes, or bug fixes. Minor versions have no name.
 
-Every commit that changes engine behavior **must bump the version by 0.0.1** (patch bump).
+Every commit that changes engine behavior **must bump the minor version**.
