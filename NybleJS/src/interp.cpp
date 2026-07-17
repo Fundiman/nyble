@@ -31,6 +31,8 @@ Value Interpreter::execute(Stmt* stmt) {
         case ASTType::While: return executeWhile(static_cast<WhileNode*>(stmt));
         case ASTType::DoWhile: return executeDoWhile(static_cast<DoWhileNode*>(stmt));
         case ASTType::For: return executeFor(static_cast<ForNode*>(stmt));
+        case ASTType::ForIn:
+        case ASTType::ForOf: return executeForInOf(static_cast<ForInOfNode*>(stmt));
         case ASTType::Return: return executeReturn(static_cast<ReturnNode*>(stmt));
         case ASTType::Break: throw BreakSignal{};
         case ASTType::Continue: throw ContinueSignal{};
@@ -146,6 +148,49 @@ Value Interpreter::executeFor(ForNode* stmt) {
         catch (const BreakSignal&) { break; }
         catch (const ContinueSignal&) { if (stmt->inc) evaluateExpr(stmt->inc.get()); continue; }
         if (stmt->inc) evaluateExpr(stmt->inc.get());
+    }
+    currentEnv = prev;
+    return result;
+}
+
+Value Interpreter::executeForInOf(ForInOfNode* stmt) {
+    Value iterable = evaluateExpr(stmt->iterable.get());
+    auto prev = currentEnv;
+    currentEnv = currentEnv->createChild();
+    Value result;
+    if (stmt->isOf) {
+        if (iterable.isArray() && iterable.arrVal) {
+            for (size_t i = 0; i < iterable.arrVal->elements.size(); i++) {
+                currentEnv->define(stmt->varName, iterable.arrVal->elements[i]);
+                try { result = execute(stmt->body.get()); }
+                catch (const BreakSignal&) { break; }
+                catch (const ContinueSignal&) { continue; }
+            }
+        }
+    } else {
+        if (iterable.isObject() && iterable.objVal) {
+            std::vector<std::string> keys;
+            for (auto& [k, v] : iterable.objVal->properties) {
+                if (k != "__dateValue__") keys.push_back(k);
+            }
+            GCObject* p = iterable.objVal->proto;
+            while (p) {
+                for (auto& [k, v] : p->properties) {
+                    if (k != "__dateValue__") {
+                        bool found = false;
+                        for (auto& ek : keys) { if (ek == k) { found = true; break; } }
+                        if (!found) keys.push_back(k);
+                    }
+                }
+                p = p->proto;
+            }
+            for (auto& k : keys) {
+                currentEnv->define(stmt->varName, Value::makeStr(k));
+                try { result = execute(stmt->body.get()); }
+                catch (const BreakSignal&) { break; }
+                catch (const ContinueSignal&) { continue; }
+            }
+        }
     }
     currentEnv = prev;
     return result;
@@ -294,11 +339,18 @@ Value Interpreter::evalBinary(BinaryExprNode* expr) {
     if (expr->op == ">=") return left.cmp(right, ">=");
     if (expr->op == "&&") return left.isTruthy() ? right : left;
     if (expr->op == "||") return left.isTruthy() ? left : right;
+    if (expr->op == "&") return left.bitAnd(right);
+    if (expr->op == "|") return left.bitOr(right);
+    if (expr->op == "^") return left.bitXor(right);
+    if (expr->op == "<<") return left.shl(right);
+    if (expr->op == ">>") return left.shr(right);
+    if (expr->op == ">>>") return left.ushr(right);
     return Value::makeUndefined();
 }
 
 Value Interpreter::evalUnary(UnaryExprNode* expr) {
     if (expr->op == "!") return evaluateExpr(expr->operand.get()).logicalNot();
+    if (expr->op == "~") return evaluateExpr(expr->operand.get()).bitNot();
     if (expr->op == "-" && expr->prefix) return evaluateExpr(expr->operand.get()).unaryMinus();
     if (expr->op == "+" && expr->prefix) return evaluateExpr(expr->operand.get()).unaryPlus();
     if (expr->op == "typeof") return evaluateExpr(expr->operand.get()).typeOf();
@@ -542,20 +594,51 @@ Value Interpreter::evalAssign(AssignNode* expr) {
         if (expr->op == "*=") return currentEnv->set(id->name, existing.mul(val));
         if (expr->op == "/=") return currentEnv->set(id->name, existing.div(val));
         if (expr->op == "%=") return currentEnv->set(id->name, existing.mod(val));
+        if (expr->op == "&=") return currentEnv->set(id->name, existing.bitAnd(val));
+        if (expr->op == "|=") return currentEnv->set(id->name, existing.bitOr(val));
+        if (expr->op == "^=") return currentEnv->set(id->name, existing.bitXor(val));
+        if (expr->op == "<<=") return currentEnv->set(id->name, existing.shl(val));
+        if (expr->op == ">>=") return currentEnv->set(id->name, existing.shr(val));
+        if (expr->op == ">>>=") return currentEnv->set(id->name, existing.ushr(val));
     }
     if (expr->target->type == ASTType::Member) {
         auto mem = static_cast<MemberExprNode*>(expr->target.get());
         Value obj = evaluateExpr(mem->object.get());
-        std::string propName;
-        if (!mem->computed && mem->property->type == ASTType::Identifier) {
-            propName = static_cast<IdentifierNode*>(mem->property.get())->name;
-        } else {
-            propName = evaluateExpr(mem->property.get()).toString();
+        Value key = (!mem->computed && mem->property->type == ASTType::Identifier)
+            ? Value::makeStr(static_cast<IdentifierNode*>(mem->property.get())->name)
+            : evaluateExpr(mem->property.get());
+
+        bool isArr = obj.type == ValueType::Array;
+        bool numKey = key.isNumber();
+        if (!numKey && isArr) {
+            char* end = nullptr;
+            std::string s = key.toString();
+            double d = std::strtod(s.c_str(), &end);
+            if (end == s.c_str() + s.size()) { numKey = true; key = Value::makeNum(d); }
         }
-        if (expr->op == "=") { obj.setProperty(propName, val); return val; }
-        Value existing = obj.getProperty(propName);
-        if (expr->op == "+=") { obj.setProperty(propName, existing.add(val)); return val; }
-        if (expr->op == "-=") { obj.setProperty(propName, existing.sub(val)); return val; }
+
+        auto getVal = [&]() -> Value {
+            if (isArr && numKey) return obj.getIndex((size_t)key.toNumber());
+            return obj.getProperty(key.toString());
+        };
+        auto setVal = [&](const Value& v) {
+            if (isArr && numKey) obj.setIndex((size_t)key.toNumber(), v);
+            else obj.setProperty(key.toString(), v);
+        };
+
+        if (expr->op == "=") { setVal(val); return val; }
+        Value existing = getVal();
+        if (expr->op == "+=") { setVal(existing.add(val)); return existing.add(val); }
+        if (expr->op == "-=") { setVal(existing.sub(val)); return existing.sub(val); }
+        if (expr->op == "*=") { setVal(existing.mul(val)); return existing.mul(val); }
+        if (expr->op == "/=") { setVal(existing.div(val)); return existing.div(val); }
+        if (expr->op == "%=") { setVal(existing.mod(val)); return existing.mod(val); }
+        if (expr->op == "&=") { setVal(existing.bitAnd(val)); return existing.bitAnd(val); }
+        if (expr->op == "|=") { setVal(existing.bitOr(val)); return existing.bitOr(val); }
+        if (expr->op == "^=") { setVal(existing.bitXor(val)); return existing.bitXor(val); }
+        if (expr->op == "<<=") { setVal(existing.shl(val)); return existing.shl(val); }
+        if (expr->op == ">>=") { setVal(existing.shr(val)); return existing.shr(val); }
+        if (expr->op == ">>>=") { setVal(existing.ushr(val)); return existing.ushr(val); }
     }
     return val;
 }

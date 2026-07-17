@@ -8,7 +8,7 @@ namespace nyble {
 
 enum class ASTType {
     // Statements
-    Block, ExprStmt, VarDecl, FunDecl, If, While, DoWhile, For,
+    Block, ExprStmt, VarDecl, FunDecl, If, While, DoWhile, For, ForIn, ForOf,
     Return, Break, Continue, Switch, Throw, Try,
     // Expressions
     Binary, Unary, Call, Member, Identifier, Literal,
@@ -51,6 +51,14 @@ struct ForNode : Stmt {
     std::unique_ptr<Stmt> init;
     std::unique_ptr<Expr> cond;
     std::unique_ptr<Expr> inc;
+    std::unique_ptr<Stmt> body;
+};
+struct ForInOfNode : Stmt {
+    ForInOfNode() { type = ASTType::ForIn; }
+    std::string varName;
+    bool isConst = false;
+    bool isOf = false;
+    std::unique_ptr<Expr> iterable;
     std::unique_ptr<Stmt> body;
 };
 struct ReturnNode : Stmt { ReturnNode() { type = ASTType::Return; } std::unique_ptr<Expr> value; };

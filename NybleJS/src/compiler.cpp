@@ -46,6 +46,8 @@ void Compiler::compileStmt(Stmt* stmt) {
         case ASTType::While: compileWhile(static_cast<WhileNode*>(stmt)); break;
         case ASTType::DoWhile: compileDoWhile(static_cast<DoWhileNode*>(stmt)); break;
         case ASTType::For: compileFor(static_cast<ForNode*>(stmt)); break;
+        case ASTType::ForIn:
+        case ASTType::ForOf: compileForInOf(static_cast<ForInOfNode*>(stmt)); break;
         case ASTType::Return: compileReturn(static_cast<ReturnNode*>(stmt)); break;
         case ASTType::Break: emitJump(OpCode::JMP); break;
         case ASTType::Continue: emitLoop(loopStart); break;
@@ -137,6 +139,145 @@ void Compiler::compileFor(ForNode* stmt) {
     emitLoop(loopStart);
     if (stmt->cond) patchJump(exit);
     loopStart = old; hasLoop = oldH;
+    exitScope();
+}
+
+void Compiler::compileForInOf(ForInOfNode* stmt) {
+    enterScope();
+
+    compileExpr(stmt->iterable.get());
+    size_t iterStr = makeString("_iter");
+    emit(OpCode::STORE);
+    emitShort((uint16_t)iterStr);
+
+    if (stmt->isOf) {
+        size_t lenStr = makeString("_len");
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)iterStr);
+        size_t lenProp = makeString("length");
+        emit(OpCode::GET_PROP);
+        emitShort((uint16_t)lenProp);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)lenStr);
+
+        size_t idxStr = makeString("_i");
+        size_t zeroNum = makeNum(0.0);
+        emit(OpCode::PUSH_NUM);
+        emitShort((uint16_t)zeroNum);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)idxStr);
+
+        size_t old = loopStart; bool oldH = hasLoop;
+        loopStart = chunk->count(); hasLoop = true;
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)lenStr);
+        emit(OpCode::LT);
+        size_t exit = emitJump(OpCode::JMP_IF_FALSE);
+
+        enterScope();
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)iterStr);
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        emit(OpCode::GET_INDEX);
+        size_t varStr = makeString(stmt->varName);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)varStr);
+
+        compileStmt(stmt->body.get());
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        size_t oneNum = makeNum(1.0);
+        emit(OpCode::PUSH_NUM);
+        emitShort((uint16_t)oneNum);
+        emit(OpCode::ADD);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)idxStr);
+
+        exitScope();
+        emitLoop(loopStart);
+        patchJump(exit);
+
+        loopStart = old; hasLoop = oldH;
+    } else {
+        size_t objKeysStr = makeString("Object");
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)objKeysStr);
+        size_t keysFn = makeString("keys");
+        emit(OpCode::GET_PROP);
+        emitShort((uint16_t)keysFn);
+
+        emit(OpCode::PUSH_UNDEFINED);
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)iterStr);
+        emit(OpCode::CALL);
+        emitShort(1);
+
+        size_t keysStr = makeString("_keys");
+        emit(OpCode::STORE);
+        emitShort((uint16_t)keysStr);
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)keysStr);
+        size_t lenProp = makeString("length");
+        emit(OpCode::GET_PROP);
+        emitShort((uint16_t)lenProp);
+        size_t lenStr = makeString("_len");
+        emit(OpCode::STORE);
+        emitShort((uint16_t)lenStr);
+
+        size_t idxStr = makeString("_i");
+        size_t zeroNum = makeNum(0.0);
+        emit(OpCode::PUSH_NUM);
+        emitShort((uint16_t)zeroNum);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)idxStr);
+
+        size_t old = loopStart; bool oldH = hasLoop;
+        loopStart = chunk->count(); hasLoop = true;
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)lenStr);
+        emit(OpCode::LT);
+        size_t exit = emitJump(OpCode::JMP_IF_FALSE);
+
+        enterScope();
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)keysStr);
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        emit(OpCode::GET_INDEX);
+        size_t varStr = makeString(stmt->varName);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)varStr);
+
+        compileStmt(stmt->body.get());
+
+        emit(OpCode::LOAD);
+        emitShort((uint16_t)idxStr);
+        size_t oneNum = makeNum(1.0);
+        emit(OpCode::PUSH_NUM);
+        emitShort((uint16_t)oneNum);
+        emit(OpCode::ADD);
+        emit(OpCode::STORE);
+        emitShort((uint16_t)idxStr);
+
+        exitScope();
+        emitLoop(loopStart);
+        patchJump(exit);
+
+        loopStart = old; hasLoop = oldH;
+    }
+
     exitScope();
 }
 
@@ -312,6 +453,8 @@ void Compiler::compileBinary(BinaryExprNode* expr) {
     BINOP("==", OpCode::EQ) BINOP("!=", OpCode::NEQ) BINOP("===", OpCode::STRICT_EQ)
     BINOP("!==", OpCode::STRICT_NEQ) BINOP("<", OpCode::LT) BINOP(">", OpCode::GT)
     BINOP("<=", OpCode::LTE) BINOP(">=", OpCode::GTE)
+    BINOP("&", OpCode::BIT_AND) BINOP("|", OpCode::BIT_OR) BINOP("^", OpCode::BIT_XOR)
+    BINOP("<<", OpCode::SHL) BINOP(">>", OpCode::SHR) BINOP(">>>", OpCode::USHR)
     #undef BINOP
 }
 
@@ -338,6 +481,7 @@ void Compiler::compileUnary(UnaryExprNode* expr) {
     if (expr->op == "-") emit(OpCode::NEGATE);
     else if (expr->op == "!") emit(OpCode::NOT);
     else if (expr->op == "typeof") emit(OpCode::TYPEOF);
+    else if (expr->op == "~") emit(OpCode::BIT_NOT);
 }
 
 void Compiler::compileCall(CallExprNode* expr) {
@@ -436,21 +580,65 @@ void Compiler::compileAssign(AssignNode* expr) {
             else if (expr->op == "*=") emit(OpCode::MUL);
             else if (expr->op == "/=") emit(OpCode::DIV);
             else if (expr->op == "%=") emit(OpCode::MOD);
+            else if (expr->op == "&=") emit(OpCode::BIT_AND);
+            else if (expr->op == "|=") emit(OpCode::BIT_OR);
+            else if (expr->op == "^=") emit(OpCode::BIT_XOR);
+            else if (expr->op == "<<=") emit(OpCode::SHL);
+            else if (expr->op == ">>=") emit(OpCode::SHR);
+            else if (expr->op == ">>>=") emit(OpCode::USHR);
             emit(OpCode::DUP);
             emit(OpCode::STORE);
             emitShort((uint16_t)ns);
         }
     } else if (expr->target->type == ASTType::Member) {
         auto mem = static_cast<MemberExprNode*>(expr->target.get());
-        compileExpr(mem->object.get());
-        compileExpr(expr->value.get());
+        auto emitBinOp = [&](const std::string& op) {
+            if (op == "+=") emit(OpCode::ADD);
+            else if (op == "-=") emit(OpCode::SUB);
+            else if (op == "*=") emit(OpCode::MUL);
+            else if (op == "/=") emit(OpCode::DIV);
+            else if (op == "%=") emit(OpCode::MOD);
+            else if (op == "&=") emit(OpCode::BIT_AND);
+            else if (op == "|=") emit(OpCode::BIT_OR);
+            else if (op == "^=") emit(OpCode::BIT_XOR);
+            else if (op == "<<=") emit(OpCode::SHL);
+            else if (op == ">>=") emit(OpCode::SHR);
+            else if (op == ">>>=") emit(OpCode::USHR);
+        };
+
         if (!mem->computed && mem->property->type == ASTType::Identifier) {
             auto id = static_cast<IdentifierNode*>(mem->property.get());
             size_t s = makeString(id->name);
+            compileExpr(mem->object.get());
             if (expr->op == "=") {
-                emit(OpCode::DUP);
+                compileExpr(expr->value.get());
                 emit(OpCode::SET_PROP);
                 emitShort((uint16_t)s);
+                emit(OpCode::SWAP);
+                emit(OpCode::POP);
+            } else {
+                emit(OpCode::DUP);
+                emit(OpCode::GET_PROP);
+                emitShort((uint16_t)s);
+                compileExpr(expr->value.get());
+                emitBinOp(expr->op);
+                emit(OpCode::SET_PROP);
+                emitShort((uint16_t)s);
+                emit(OpCode::SWAP);
+                emit(OpCode::POP);
+            }
+        } else if (mem->computed) {
+            compileExpr(mem->object.get());
+            compileExpr(mem->property.get());
+            if (expr->op == "=") {
+                compileExpr(expr->value.get());
+                emit(OpCode::SET_INDEX);
+            } else {
+                emit(OpCode::DUP2);
+                emit(OpCode::GET_INDEX);
+                compileExpr(expr->value.get());
+                emitBinOp(expr->op);
+                emit(OpCode::SET_INDEX);
             }
         }
     }

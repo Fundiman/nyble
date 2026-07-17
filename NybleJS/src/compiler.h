@@ -36,6 +36,7 @@ struct Compiler {
     void compileWhile(WhileNode* stmt);
     void compileDoWhile(DoWhileNode* stmt);
     void compileFor(ForNode* stmt);
+    void compileForInOf(ForInOfNode* stmt);
     void compileReturn(ReturnNode* stmt);
     void compileSwitch(SwitchNode* stmt);
     void compileThrow(ThrowNode* stmt);

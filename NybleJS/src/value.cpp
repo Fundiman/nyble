@@ -81,6 +81,18 @@ std::string Value::toString() const {
         case ValueType::String: return strVal ? strVal->str : "";
         case ValueType::Object: {
             if (!objVal) return "[object Object]";
+            auto dateIt = objVal->properties.find("__dateValue__");
+            if (dateIt != objVal->properties.end() && gDatePrototype) {
+                GCObject* p = objVal->proto;
+                while (p) {
+                    auto fnIt = p->properties.find("toString");
+                    if (fnIt != p->properties.end()) {
+                        Value result = fnIt->second.nativeVal({}, *this);
+                        return result.toString();
+                    }
+                    p = p->proto;
+                }
+            }
             auto nameIt = objVal->properties.find("name");
             auto msgIt = objVal->properties.find("message");
             if (nameIt != objVal->properties.end()) {
@@ -294,6 +306,53 @@ Value Value::preDec() {
     if (type == ValueType::Number) numVal -= 1;
     else { type = ValueType::Number; numVal = -1; }
     return *this;
+}
+
+static int32_t toInt32(double v) {
+    if (std::isnan(v) || std::isinf(v) || v == 0.0) return 0;
+    double two32 = 4294967296.0;
+    double d = std::fmod(v, two32);
+    if (d < 0) d += two32;
+    if (d >= 2147483648.0) d -= two32;
+    return (int32_t)d;
+}
+
+static uint32_t toUint32(double v) {
+    return (uint32_t)toInt32(v);
+}
+
+Value Value::bitNot() const {
+    return Value::makeNum(~toInt32(toNumber()));
+}
+
+Value Value::bitAnd(const Value& other) const {
+    return Value::makeNum(toInt32(toNumber()) & toInt32(other.toNumber()));
+}
+
+Value Value::bitOr(const Value& other) const {
+    return Value::makeNum(toInt32(toNumber()) | toInt32(other.toNumber()));
+}
+
+Value Value::bitXor(const Value& other) const {
+    return Value::makeNum(toInt32(toNumber()) ^ toInt32(other.toNumber()));
+}
+
+Value Value::shl(const Value& other) const {
+    int32_t l = toInt32(toNumber());
+    int32_t r = toUint32(other.toNumber()) & 0x1F;
+    return Value::makeNum(l << r);
+}
+
+Value Value::shr(const Value& other) const {
+    int32_t l = toInt32(toNumber());
+    int32_t r = toUint32(other.toNumber()) & 0x1F;
+    return Value::makeNum(l >> r);
+}
+
+Value Value::ushr(const Value& other) const {
+    uint32_t l = toUint32(toNumber());
+    uint32_t r = toUint32(other.toNumber()) & 0x1F;
+    return Value::makeNum((double)((uint32_t)(l >> r)));
 }
 
 void GCObject::trace(std::vector<GCHeader*>& worklist) {

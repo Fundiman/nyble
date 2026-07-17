@@ -501,18 +501,376 @@ void installBuiltins(std::shared_ptr<Environment> env) {
     // Give Function.prototype to all functions via a global
     gFunctionPrototype = functionProto.objVal;
 
-    // Date
-    Value dateObj = Value::makeObj();
-    dateObj.setProperty("now", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
+    // Date helper: extract __dateValue__ from thisVal
+    static auto dateGetMs = [](const Value& thisVal) -> double {
+        if (thisVal.isObject() && thisVal.objVal) {
+            auto it = thisVal.objVal->properties.find("__dateValue__");
+            if (it != thisVal.objVal->properties.end()) return it->second.toNumber();
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    static auto dateSetMs = [](const Value& thisVal, double ms) {
+        if (thisVal.isObject() && thisVal.objVal) {
+            thisVal.objVal->properties["__dateValue__"] = Value::makeNum(ms);
+        }
+    };
+    static auto dateToTm = [](double ms, struct tm& out) -> time_t {
+        time_t t = (time_t)(ms / 1000);
+#ifdef _WIN32
+        gmtime_s(&out, &t);
+#else
+        gmtime_r(&t, &out);
+#endif
+        return t;
+    };
+    static auto dateTmToMs = [](const struct tm& t) -> double {
+        int y = t.tm_year + 1900;
+        int m = t.tm_mon + 1;
+        int d = t.tm_mday;
+        if (m <= 2) { y--; m += 12; }
+        int era = y / 400;
+        int yoe = y - era * 400;
+        int doy = (153 * (m - 3) + 2) / 5 + d - 1;
+        int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        int64_t epochDays = (int64_t)era * 146097 + doe - 719468;
+        int64_t raw = epochDays * 86400 + (int64_t)t.tm_hour * 3600 + (int64_t)t.tm_min * 60 + t.tm_sec;
+        return (double)raw * 1000;
+    };
+    static auto dateParseISO = [](const std::string& s) -> double {
+        struct tm t = {};
+        bool hasTime = s.find('T') != std::string::npos || s.find('t') != std::string::npos;
+        int msPart = 0;
+        if (s.size() >= 4) t.tm_year = std::stoi(s.substr(0, 4)) - 1900;
+        if (s.size() >= 7) t.tm_mon = std::stoi(s.substr(5, 2)) - 1;
+        if (s.size() >= 10) t.tm_mday = std::stoi(s.substr(8, 2));
+        if (hasTime) {
+            size_t ti = s.find('T');
+            if (ti == std::string::npos) ti = s.find('t');
+            if (s.size() > ti + 2) t.tm_hour = std::stoi(s.substr(ti + 1, 2));
+            if (s.size() > ti + 5) t.tm_min = std::stoi(s.substr(ti + 4, 2));
+            if (s.size() > ti + 8) t.tm_sec = std::stoi(s.substr(ti + 7, 2));
+            size_t dotPos = s.find('.', ti);
+            if (dotPos != std::string::npos && s.size() > dotPos + 3) {
+                msPart = std::stoi(s.substr(dotPos + 1, 3));
+            }
+        }
+        t.tm_isdst = 0;
+        return dateTmToMs(t) + msPart;
+    };
+    static auto dateISOString = [](double ms) -> std::string {
+        struct tm t;
+        dateToTm(ms, t);
+        int msPart = (int)((int64_t)ms % 1000);
+        std::ostringstream os;
+        os << std::setfill('0') << std::setw(4) << (t.tm_year + 1900) << "-"
+           << std::setw(2) << (t.tm_mon + 1) << "-"
+           << std::setw(2) << t.tm_mday << "T"
+           << std::setw(2) << t.tm_hour << ":"
+           << std::setw(2) << t.tm_min << ":"
+           << std::setw(2) << t.tm_sec << "."
+           << std::setw(3) << msPart << "Z";
+        return os.str();
+    };
+    static auto dateUTCString = [](double ms) -> std::string {
+        struct tm t;
+        dateToTm(ms, t);
+        static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        static const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+        std::ostringstream os;
+        os << days[t.tm_wday] << ", " << std::setfill('0') << std::setw(2) << t.tm_mday
+           << " " << months[t.tm_mon] << " " << (t.tm_year + 1900) << " "
+           << std::setw(2) << t.tm_hour << ":" << std::setw(2) << t.tm_min << ":"
+           << std::setw(2) << t.tm_sec << " GMT";
+        return os.str();
+    };
+    static auto dateDateString = [](double ms) -> std::string {
+        struct tm t;
+        dateToTm(ms, t);
+        static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        static const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+        std::ostringstream os;
+        os << days[t.tm_wday] << " " << months[t.tm_mon] << " " << std::setfill('0')
+           << std::setw(2) << t.tm_mday << " " << (t.tm_year + 1900);
+        return os.str();
+    };
+    static auto dateTimeString = [](double ms) -> std::string {
+        struct tm t;
+        dateToTm(ms, t);
+        std::ostringstream os;
+        os << std::setfill('0') << std::setw(2) << t.tm_hour << ":"
+           << std::setw(2) << t.tm_min << ":" << std::setw(2) << t.tm_sec << " GMT";
+        return os.str();
+    };
+    static auto dateLocalString = [](double ms) -> std::string {
+        struct tm t;
+        time_t raw = (time_t)(ms / 1000);
+#ifdef _WIN32
+        localtime_s(&t, &raw);
+#else
+        localtime_r(&raw, &t);
+#endif
+        static const char* days[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+        static const char* months[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+        std::ostringstream os;
+        os << days[t.tm_wday] << " " << months[t.tm_mon] << " " << std::setfill('0')
+           << std::setw(2) << t.tm_mday << " " << (t.tm_year + 1900) << " "
+           << std::setw(2) << t.tm_hour << ":" << std::setw(2) << t.tm_min << ":"
+           << std::setw(2) << t.tm_sec;
+        return os.str();
+    };
+
+    // Date.prototype
+    Value dateProto = Value::makeObj();
+    if (gObjectPrototype) dateProto.objVal->proto = gObjectPrototype;
+
+    // Getters
+    dateProto.setProperty("getTime", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeNum(dateGetMs(thisVal));
+    }));
+    dateProto.setProperty("getFullYear", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_year + 1900);
+    }));
+    dateProto.setProperty("getMonth", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_mon);
+    }));
+    dateProto.setProperty("getDate", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_mday);
+    }));
+    dateProto.setProperty("getDay", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_wday);
+    }));
+    dateProto.setProperty("getHours", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_hour);
+    }));
+    dateProto.setProperty("getMinutes", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_min);
+    }));
+    dateProto.setProperty("getSeconds", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_sec);
+    }));
+    dateProto.setProperty("getMilliseconds", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        return Value::makeNum((int64_t)ms % 1000);
+    }));
+    dateProto.setProperty("getTimezoneOffset", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        time_t raw = (time_t)(ms / 1000);
+        struct tm local;
+#ifdef _WIN32
+        localtime_s(&local, &raw);
+#else
+        localtime_r(&raw, &local);
+#endif
+        struct tm utc;
+        dateToTm(ms, utc);
+        double diff = difftime(mktime(&local), mktime(&utc));
+        return Value::makeNum(diff / 60.0);
+    }));
+
+    // UTC getters
+    dateProto.setProperty("getUTCFullYear", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_year + 1900);
+    }));
+    dateProto.setProperty("getUTCMonth", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_mon);
+    }));
+    dateProto.setProperty("getUTCDate", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_mday);
+    }));
+    dateProto.setProperty("getUTCDay", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_wday);
+    }));
+    dateProto.setProperty("getUTCHours", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_hour);
+    }));
+    dateProto.setProperty("getUTCMinutes", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_min);
+    }));
+    dateProto.setProperty("getUTCSeconds", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        struct tm t; dateToTm(dateGetMs(thisVal), t);
+        return Value::makeNum(t.tm_sec);
+    }));
+    dateProto.setProperty("getUTCMilliseconds", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        return Value::makeNum((int64_t)ms % 1000);
+    }));
+
+    // Setters
+    dateProto.setProperty("setTime", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = args.empty() ? 0 : args[0].toNumber();
+        dateSetMs(thisVal, ms);
+        return Value::makeNum(ms);
+    }));
+    dateProto.setProperty("setFullYear", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (!args.empty()) t.tm_year = (int)args[0].toNumber() - 1900;
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setMonth", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (!args.empty()) t.tm_mon = (int)args[0].toNumber();
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setDate", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (!args.empty()) t.tm_mday = (int)args[0].toNumber();
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setHours", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (args.size() > 0) t.tm_hour = (int)args[0].toNumber();
+        if (args.size() > 1) t.tm_min = (int)args[1].toNumber();
+        if (args.size() > 2) t.tm_sec = (int)args[2].toNumber();
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setMinutes", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (args.size() > 0) t.tm_min = (int)args[0].toNumber();
+        if (args.size() > 1) t.tm_sec = (int)args[1].toNumber();
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setSeconds", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        struct tm t; dateToTm(ms, t);
+        if (args.size() > 0) t.tm_sec = (int)args[0].toNumber();
+        double newMs = dateTmToMs(t);
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+    dateProto.setProperty("setMilliseconds", Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms = dateGetMs(thisVal);
+        double newMs = std::floor(ms / 1000) * 1000 + (args.empty() ? 0 : std::fmod(args[0].toNumber(), 1000));
+        dateSetMs(thisVal, newMs);
+        return Value::makeNum(newMs);
+    }));
+
+    // Output methods
+    dateProto.setProperty("toString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateLocalString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toDateString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateDateString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toTimeString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateTimeString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toISOString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateISOString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toJSON", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateISOString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toUTCString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateUTCString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toLocaleString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateLocalString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toLocaleDateString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateDateString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("toLocaleTimeString", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeStr(dateTimeString(dateGetMs(thisVal)));
+    }));
+    dateProto.setProperty("valueOf", Value::makeNative([](const std::vector<Value>&, const Value& thisVal) -> Value {
+        return Value::makeNum(dateGetMs(thisVal));
+    }));
+
+    gDatePrototype = dateProto.objVal;
+
+    // Date constructor
+    Value dateConstructor = Value::makeNative([](const std::vector<Value>& args, const Value& thisVal) -> Value {
+        double ms;
+        if (args.empty()) {
+            auto now = std::chrono::system_clock::now();
+            ms = (double)std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        } else if (args.size() == 1) {
+            if (args[0].isString()) {
+                ms = dateParseISO(args[0].toString());
+            } else {
+                ms = args[0].toNumber();
+            }
+        } else if (args.size() >= 2) {
+            struct tm t = {};
+            t.tm_year = (int)args[0].toNumber() - 1900;
+            t.tm_mon = (int)args[1].toNumber();
+            t.tm_mday = args.size() > 2 ? (int)args[2].toNumber() : 1;
+            t.tm_hour = args.size() > 3 ? (int)args[3].toNumber() : 0;
+            t.tm_min = args.size() > 4 ? (int)args[4].toNumber() : 0;
+            t.tm_sec = args.size() > 5 ? (int)args[5].toNumber() : 0;
+            t.tm_isdst = 0;
+            ms = dateTmToMs(t);
+            if (args.size() > 6) {
+                ms += std::fmod(args[6].toNumber(), 1000);
+            }
+        } else {
+            ms = std::numeric_limits<double>::quiet_NaN();
+        }
+        Value obj = Value::makeObj();
+        if (gDatePrototype) obj.objVal->proto = gDatePrototype;
+        obj.objVal->properties["__dateValue__"] = Value::makeNum(ms);
+        return obj;
+    });
+    dateConstructor.setProperty("prototype", dateProto);
+
+    // Date.now
+    dateConstructor.setProperty("now", Value::makeNative([](const std::vector<Value>&, const Value&) -> Value {
         auto now = std::chrono::system_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         return Value::makeNum((double)ms);
     }));
-    dateObj.setProperty("parse", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
+
+    // Date.parse - basic ISO 8601 support
+    dateConstructor.setProperty("parse", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
         if (args.empty()) return Value::makeNum(std::numeric_limits<double>::quiet_NaN());
-        return Value::makeNum((double)std::time(nullptr) * 1000);
+        return Value::makeNum(dateParseISO(args[0].toString()));
     }));
-    env->define("Date", dateObj);
+
+    // Date.UTC
+    dateConstructor.setProperty("UTC", Value::makeNative([](const std::vector<Value>& args, const Value&) -> Value {
+        if (args.size() < 2) return Value::makeNum(std::numeric_limits<double>::quiet_NaN());
+        struct tm t = {};
+        t.tm_year = (int)args[0].toNumber() - 1900;
+        t.tm_mon = (int)args[1].toNumber();
+        t.tm_mday = args.size() > 2 ? (int)args[2].toNumber() : 1;
+        t.tm_hour = args.size() > 3 ? (int)args[3].toNumber() : 0;
+        t.tm_min = args.size() > 4 ? (int)args[4].toNumber() : 0;
+        t.tm_sec = args.size() > 5 ? (int)args[5].toNumber() : 0;
+        t.tm_isdst = 0;
+        double ms = dateTmToMs(t);
+        if (args.size() > 6) ms += std::fmod(args[6].toNumber(), 1000);
+        return Value::makeNum(ms);
+    }));
+
+    env->define("Date", dateConstructor);
 
     // RegExp dummy
     env->define("RegExp", Value::makeObj());

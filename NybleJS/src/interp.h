@@ -38,6 +38,7 @@ private:
     Value executeWhile(WhileNode* stmt);
     Value executeDoWhile(DoWhileNode* stmt);
     Value executeFor(ForNode* stmt);
+    Value executeForInOf(ForInOfNode* stmt);
     Value executeReturn(ReturnNode* stmt);
     Value executeSwitch(SwitchNode* stmt);
     Value executeThrow(ThrowNode* stmt);

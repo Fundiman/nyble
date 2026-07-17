@@ -100,6 +100,15 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
                 stack.push_back(stack.back());
                 break;
 
+            case OpCode::DUP2: {
+                Value b = stack.back(); stack.pop_back();
+                Value a = stack.back();
+                stack.push_back(b);
+                stack.push_back(a);
+                stack.push_back(b);
+                break;
+            }
+
             case OpCode::SWAP: {
                 Value a = stack.back(); stack.pop_back();
                 Value b = stack.back(); stack.pop_back();
@@ -141,7 +150,25 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
             case OpCode::GET_INDEX: {
                 Value index = stack.back(); stack.pop_back();
                 Value obj = stack.back(); stack.pop_back();
-                stack.push_back(obj.getIndex((size_t)index.toNumber()));
+                if (obj.type == ValueType::Object || obj.type == ValueType::Function) {
+                    stack.push_back(obj.getProperty(index.toString()));
+                } else if (obj.type == ValueType::Array) {
+                    if (index.isNumber()) {
+                        stack.push_back(obj.getIndex((size_t)index.toNumber()));
+                    } else {
+                        std::string key = index.toString();
+                        char* end = nullptr;
+                        double idx = std::strtod(key.c_str(), &end);
+                        if (end == key.c_str() + key.size())
+                            stack.push_back(obj.getIndex((size_t)idx));
+                        else
+                            stack.push_back(obj.getProperty(key));
+                    }
+                } else if (obj.type == ValueType::String) {
+                    stack.push_back(obj.getIndex((size_t)index.toNumber()));
+                } else {
+                    stack.push_back(Value::makeUndefined());
+                }
                 break;
             }
 
@@ -149,7 +176,11 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
                 Value val = stack.back(); stack.pop_back();
                 Value index = stack.back(); stack.pop_back();
                 Value obj = stack.back(); stack.pop_back();
-                obj.setIndex((size_t)index.toNumber(), val);
+                if (obj.type == ValueType::Array && index.isNumber()) {
+                    obj.setIndex((size_t)index.toNumber(), val);
+                } else if (obj.type == ValueType::Object || obj.type == ValueType::Function || obj.type == ValueType::Array) {
+                    obj.setProperty(index.toString(), val);
+                }
                 stack.push_back(val);
                 break;
             }
@@ -191,6 +222,12 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
                 break;
             }
 
+            case OpCode::BIT_NOT: {
+                Value v = stack.back(); stack.pop_back();
+                stack.push_back(v.bitNot());
+                break;
+            }
+
             case OpCode::ADD: {
                 Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
                 stack.push_back(a.add(b)); break;
@@ -214,6 +251,30 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
             case OpCode::POW: {
                 Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
                 stack.push_back(a.poww(b)); break;
+            }
+            case OpCode::BIT_AND: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.bitAnd(b)); break;
+            }
+            case OpCode::BIT_OR: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.bitOr(b)); break;
+            }
+            case OpCode::BIT_XOR: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.bitXor(b)); break;
+            }
+            case OpCode::SHL: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.shl(b)); break;
+            }
+            case OpCode::SHR: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.shr(b)); break;
+            }
+            case OpCode::USHR: {
+                Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();
+                stack.push_back(a.ushr(b)); break;
             }
             case OpCode::EQ: {
                 Value b = stack.back(); stack.pop_back(); Value a = stack.back(); stack.pop_back();

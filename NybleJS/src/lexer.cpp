@@ -139,6 +139,8 @@ Token Lexer::readIdentifier() {
         {"new", TokenType::New},
         {"this", TokenType::This},
         {"class", TokenType::Class},
+        {"in", TokenType::In},
+        {"of", TokenType::Of},
 
         {"try", TokenType::Try},
         {"catch", TokenType::Catch},
@@ -216,18 +218,29 @@ Token Lexer::readPunctuatorOrOperator() {
             if (peek() == '=') { advance(); return peek() == '=' ? (advance(), Token{TokenType::NotEqEq, "!==", startLine, startCol}) : Token{TokenType::NotEq, "!=", startLine, startCol}; }
             return {TokenType::Not, "!", startLine, startCol};
         case '<':
+            if (peek() == '<') { advance(); if (peek() == '=') { advance(); return {TokenType::ShiftLeftEq, "<<=", startLine, startCol}; } return {TokenType::ShiftLeft, "<<", startLine, startCol}; }
             if (peek() == '=') { advance(); return {TokenType::LessEq, "<=", startLine, startCol}; }
             return {TokenType::Less, "<", startLine, startCol};
         case '>':
+            if (peek() == '>') { advance();
+                if (peek() == '>') { advance(); if (peek() == '=') { advance(); return {TokenType::ShiftRightUnsignedEq, ">>>=", startLine, startCol}; } return {TokenType::ShiftRightUnsigned, ">>>", startLine, startCol}; }
+                if (peek() == '=') { advance(); return {TokenType::ShiftRightEq, ">>=", startLine, startCol}; }
+                return {TokenType::ShiftRight, ">>", startLine, startCol};
+            }
             if (peek() == '=') { advance(); return {TokenType::GreaterEq, ">=", startLine, startCol}; }
             return {TokenType::Greater, ">", startLine, startCol};
         case '&':
             if (peek() == '&') { advance(); return {TokenType::AndAnd, "&&", startLine, startCol}; }
-            return {TokenType::And, "&", startLine, startCol};
+            if (peek() == '=') { advance(); return {TokenType::BitAndEq, "&=", startLine, startCol}; }
+            return {TokenType::BitAnd, "&", startLine, startCol};
         case '|':
             if (peek() == '|') { advance(); return {TokenType::OrOr, "||", startLine, startCol}; }
-            return {TokenType::Or, "|", startLine, startCol};
-        case '~': return {TokenType::Invalid, "~", startLine, startCol};
+            if (peek() == '=') { advance(); return {TokenType::BitOrEq, "|=", startLine, startCol}; }
+            return {TokenType::BitOr, "|", startLine, startCol};
+        case '^':
+            if (peek() == '=') { advance(); return {TokenType::BitXorEq, "^=", startLine, startCol}; }
+            return {TokenType::BitXor, "^", startLine, startCol};
+        case '~': return {TokenType::BitNot, "~", startLine, startCol};
         default: return {TokenType::Invalid, std::string(1, c), startLine, startCol};
     }
 }

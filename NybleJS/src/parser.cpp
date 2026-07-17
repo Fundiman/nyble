@@ -152,23 +152,63 @@ std::unique_ptr<DoWhileNode> Parser::parseDoWhileStmt() {
     return stmt;
 }
 
-std::unique_ptr<ForNode> Parser::parseForStmt() {
-    auto stmt = std::make_unique<ForNode>();
-    stmt->line = previous().line;
+std::unique_ptr<Stmt> Parser::parseForStmt() {
+    size_t line = previous().line;
     consume(TokenType::LParen, "Expected '('");
     if (!check(TokenType::Semicolon)) {
         if (matchAny({TokenType::Let, TokenType::Const, TokenType::Var})) {
-            stmt->init = parseVarDecl();
+            bool isConst = previous().type == TokenType::Const;
+            Token varName = consume(TokenType::Identifier, "Expected variable name");
+            if (matchAny({TokenType::In, TokenType::Of})) {
+                auto forIn = std::make_unique<ForInOfNode>();
+                forIn->line = line;
+                forIn->varName = varName.lexeme;
+                forIn->isConst = isConst;
+                forIn->isOf = previous().type == TokenType::Of;
+                forIn->iterable = parseExpr();
+                consume(TokenType::RParen, "Expected ')'");
+                forIn->body = parseStmt();
+                return forIn;
+            }
+            // Not for-in/of: parse as regular for with var decl
+            auto varDecl = std::make_unique<VarDeclNode>();
+            varDecl->line = line;
+            varDecl->name = varName.lexeme;
+            varDecl->isConst = isConst;
+            if (match(TokenType::Eq)) {
+                varDecl->initializer = parseExpr();
+            }
+            auto forStmt = std::make_unique<ForNode>();
+            forStmt->line = line;
+            forStmt->init = std::move(varDecl);
+            if (!check(TokenType::Semicolon)) forStmt->cond = parseExpr();
+            consume(TokenType::Semicolon, "Expected ';'");
+            if (!check(TokenType::RParen)) forStmt->inc = parseExpr();
+            consume(TokenType::RParen, "Expected ')'");
+            forStmt->body = parseStmt();
+            return forStmt;
         } else {
-            stmt->init = parseExprStmt();
+            auto forStmt = std::make_unique<ForNode>();
+            forStmt->line = line;
+            forStmt->init = parseExprStmt();
+            if (!check(TokenType::Semicolon)) forStmt->cond = parseExpr();
+            consume(TokenType::Semicolon, "Expected ';'");
+            if (!check(TokenType::RParen)) forStmt->inc = parseExpr();
+            consume(TokenType::RParen, "Expected ')'");
+            forStmt->body = parseStmt();
+            return forStmt;
         }
-    } else { advance(); }
-    if (!check(TokenType::Semicolon)) stmt->cond = parseExpr();
-    consume(TokenType::Semicolon, "Expected ';'");
-    if (!check(TokenType::RParen)) stmt->inc = parseExpr();
-    consume(TokenType::RParen, "Expected ')'");
-    stmt->body = parseStmt();
-    return stmt;
+    } else {
+        advance(); // consume ;
+        auto forStmt = std::make_unique<ForNode>();
+        forStmt->line = line;
+        if (!check(TokenType::Semicolon)) forStmt->cond = parseExpr();
+        consume(TokenType::Semicolon, "Expected ';'");
+        if (!check(TokenType::RParen)) forStmt->inc = parseExpr();
+        consume(TokenType::RParen, "Expected ')'");
+        forStmt->body = parseStmt();
+        return forStmt;
+    }
 }
 
 std::unique_ptr<ReturnNode> Parser::parseReturnStmt() {
@@ -260,7 +300,9 @@ std::unique_ptr<Expr> Parser::parseExpr() { return parseAssignment(); }
 std::unique_ptr<Expr> Parser::parseAssignment() {
     auto expr = parseConditional();
     if (matchAny({TokenType::Eq, TokenType::PlusEq, TokenType::MinusEq,
-                  TokenType::StarEq, TokenType::SlashEq, TokenType::PercentEq})) {
+                  TokenType::StarEq, TokenType::SlashEq, TokenType::PercentEq,
+                  TokenType::BitAndEq, TokenType::BitOrEq, TokenType::BitXorEq,
+                  TokenType::ShiftLeftEq, TokenType::ShiftRightEq, TokenType::ShiftRightUnsignedEq})) {
         auto a = std::make_unique<AssignNode>();
         a->line = previous().line;
         a->op = previous().lexeme;
@@ -299,11 +341,50 @@ std::unique_ptr<Expr> Parser::parseOr() {
 }
 
 std::unique_ptr<Expr> Parser::parseAnd() {
-    auto expr = parseEquality();
+    auto expr = parseBitwiseOr();
     while (match(TokenType::AndAnd)) {
         auto b = std::make_unique<BinaryExprNode>();
         b->line = previous().line;
         b->op = "&&";
+        b->left = std::move(expr);
+        b->right = parseBitwiseOr();
+        expr = std::move(b);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> Parser::parseBitwiseOr() {
+    auto expr = parseBitwiseXor();
+    while (match(TokenType::BitOr)) {
+        auto b = std::make_unique<BinaryExprNode>();
+        b->line = previous().line;
+        b->op = "|";
+        b->left = std::move(expr);
+        b->right = parseBitwiseXor();
+        expr = std::move(b);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> Parser::parseBitwiseXor() {
+    auto expr = parseBitwiseAnd();
+    while (match(TokenType::BitXor)) {
+        auto b = std::make_unique<BinaryExprNode>();
+        b->line = previous().line;
+        b->op = "^";
+        b->left = std::move(expr);
+        b->right = parseBitwiseAnd();
+        expr = std::move(b);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> Parser::parseBitwiseAnd() {
+    auto expr = parseEquality();
+    while (match(TokenType::BitAnd)) {
+        auto b = std::make_unique<BinaryExprNode>();
+        b->line = previous().line;
+        b->op = "&";
         b->left = std::move(expr);
         b->right = parseEquality();
         expr = std::move(b);
@@ -325,8 +406,21 @@ std::unique_ptr<Expr> Parser::parseEquality() {
 }
 
 std::unique_ptr<Expr> Parser::parseComparison() {
-    auto expr = parseTerm();
+    auto expr = parseShift();
     while (matchAny({TokenType::Less, TokenType::Greater, TokenType::LessEq, TokenType::GreaterEq})) {
+        auto b = std::make_unique<BinaryExprNode>();
+        b->line = previous().line;
+        b->op = previous().lexeme;
+        b->left = std::move(expr);
+        b->right = parseShift();
+        expr = std::move(b);
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> Parser::parseShift() {
+    auto expr = parseTerm();
+    while (matchAny({TokenType::ShiftLeft, TokenType::ShiftRight, TokenType::ShiftRightUnsigned})) {
         auto b = std::make_unique<BinaryExprNode>();
         b->line = previous().line;
         b->op = previous().lexeme;
@@ -378,7 +472,8 @@ std::unique_ptr<Expr> Parser::parsePower() {
 
 std::unique_ptr<Expr> Parser::parseUnary() {
     if (matchAny({TokenType::Not, TokenType::Minus, TokenType::Plus,
-                  TokenType::Typeof, TokenType::PlusPlus, TokenType::MinusMinus})) {
+                  TokenType::Typeof, TokenType::PlusPlus, TokenType::MinusMinus,
+                  TokenType::BitNot})) {
         auto u = std::make_unique<UnaryExprNode>();
         u->line = previous().line;
         u->op = previous().lexeme;

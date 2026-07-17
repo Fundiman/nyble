@@ -1,4 +1,4 @@
-# NybleJS - Lightweight JavaScript Engine v0.4 (AttentionIsAllYouNeed)
+# NybleJS - Lightweight JavaScript Engine v0.5 (AttentionIsAllYouNeed)
 
 A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
@@ -14,9 +14,9 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - Recursive-descent parser with full operator precedence (14 levels)
 - Variable declarations: `let`, `const`, `var`
 - Functions: declarations, anonymous functions, arrow functions (`() => {}`, `param => expr`, `(params) => expr`)
-- Control flow: `if/else`, `while`, `do-while`, `for`, `switch/case/default`
+- Control flow: `if/else`, `while`, `do-while`, `for`, `for...in`, `for...of`, `switch/case/default`
 - `return`, `break`, `continue`
-- Expressions: binary arithmetic, comparison, strict/loose equality, logical (`&&`, `||`), unary (`!`, `-`, `+`, `typeof`, `++`, `--`), ternary (`? :`), assignment with compound ops (`=`, `+=`, `-=`, `*=`, `/=`, `%=`)
+- Expressions: binary arithmetic, comparison, strict/loose equality, logical (`&&`, `||`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`), unary (`!`, `-`, `+`, `typeof`, `++`, `--`), ternary (`? :`), assignment with compound ops (`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`)
 - Member access: `obj.prop` and `obj[expr]`
 - Call expressions
 - Array literals with hole support
@@ -43,7 +43,7 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - `try/catch/finally` with proper rethrow and scoping
 
 **Bytecode VM** (for scripts >= 300 AST nodes):
-- ~50 opcode instruction set (stack-based)
+- ~60 opcode instruction set (stack-based)
 - Bytecode compiler with jump patching for control flow
 - Scope enter/exit for block scoping
 - Exception handling with catch/finally offset patching
@@ -63,6 +63,7 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - Types: Null, Undefined, Boolean, Number, String, Object, Array, Function, NativeFunction
 - JavaScript-style type coercion (`toString()`, `toNumber()`)
 - Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`)
+- Bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`)
 - Strict (`===`) and loose (`==`) equality
 - Comparison operators (`<`, `>`, `<=`, `>=`)
 - Property/index access (`getProperty`, `setProperty`, `getIndex`, `setIndex`)
@@ -84,7 +85,7 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - **Array**: `isArray`, `from`, `of`
 - **Number**: Constants (MAX_VALUE, MIN_VALUE, NaN, POSITIVE_INFINITY, NEGATIVE_INFINITY, MAX_SAFE_INTEGER, MIN_SAFE_INTEGER, EPSILON) + methods (`isNaN`, `isFinite`, `isInteger`, `isSafeInteger`)
 - **String**: `fromCharCode`, `fromCodePoint`
-- **Date**: `now`, `parse` (static methods only, no `new Date()` constructor or instance methods)
+- **Date**: `now`, `parse`, `UTC` (static) + constructor (`new Date()`, `new Date(ms)`, `new Date(str)`, `new Date(y,m,d,h,min,s,ms)`) + instance methods (`getTime`, `getFullYear`, `getMonth`, `getDate`, `getDay`, `getHours`, `getMinutes`, `getSeconds`, `getMilliseconds`, `getTimezoneOffset`, `getUTC*`, `setTime`, `setFullYear`, `setMonth`, `setDate`, `setHours`, `setMinutes`, `setSeconds`, `setMilliseconds`, `toString`, `toDateString`, `toTimeString`, `toISOString`, `toJSON`, `toUTCString`, `toLocaleString`, `toLocaleDateString`, `toLocaleTimeString`, `valueOf`)
 - **Error**: `Error` constructor
 - **Timer stubs**: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
 - **URI stubs**: `encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`
@@ -114,13 +115,10 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - Default parameters (`function f(x = 1)`)
 - Object property shorthand (`{x, y}`)
 - Template literals with expressions
-- `new Date()` constructor and Date instance methods (`getFullYear`, `getMonth`, `getDate`, `toString`, etc.)
 - `String.prototype.split`
 - Regular expressions
 - `Intl` APIs
 - `void`, `delete`, `instanceof` operators
-- Bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`)
-- `for...in` / `for...of`
 - Comma operator
 - Label statements
 - `debugger`, `with` statements

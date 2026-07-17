@@ -112,8 +112,15 @@ public:
     Value typeOf() const;
     Value unaryMinus() const;
     Value unaryPlus() const;
+    Value bitNot() const;
     Value preInc();
     Value preDec();
+    Value bitAnd(const Value& other) const;
+    Value bitOr(const Value& other) const;
+    Value bitXor(const Value& other) const;
+    Value shl(const Value& other) const;
+    Value shr(const Value& other) const;
+    Value ushr(const Value& other) const;
 };
 
 // Exception type for propagating JS-level errors through C++ catch sites
@@ -136,6 +143,7 @@ inline GCObject* gTypeErrorPrototype = nullptr;
 inline GCObject* gReferenceErrorPrototype = nullptr;
 inline GCObject* gSyntaxErrorPrototype = nullptr;
 inline GCObject* gRangeErrorPrototype = nullptr;
+inline GCObject* gDatePrototype = nullptr;
 
 struct GCArray : GCHeader {
     std::vector<Value> elements;

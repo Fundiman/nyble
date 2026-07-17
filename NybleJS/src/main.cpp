@@ -16,7 +16,7 @@
 #define NYBLE_VM_THRESHOLD 300
 #endif
 
-static const char* NYBLE_VERSION = "0.4";
+static const char* NYBLE_VERSION = "0.5";
 static const char* NYBLE_VERSION_NAME = "AttentionIsAllYouNeed";
 
 // ANSI color codes

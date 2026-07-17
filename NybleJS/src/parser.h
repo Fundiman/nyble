@@ -37,7 +37,7 @@ private:
     std::unique_ptr<IfNode> parseIfStmt();
     std::unique_ptr<WhileNode> parseWhileStmt();
     std::unique_ptr<DoWhileNode> parseDoWhileStmt();
-    std::unique_ptr<ForNode> parseForStmt();
+    std::unique_ptr<Stmt> parseForStmt();
     std::unique_ptr<ReturnNode> parseReturnStmt();
     std::unique_ptr<SwitchNode> parseSwitchStmt();
     std::unique_ptr<ThrowNode> parseThrowStmt();
@@ -49,8 +49,12 @@ private:
     std::unique_ptr<Expr> parseConditional();
     std::unique_ptr<Expr> parseOr();
     std::unique_ptr<Expr> parseAnd();
+    std::unique_ptr<Expr> parseBitwiseOr();
+    std::unique_ptr<Expr> parseBitwiseXor();
+    std::unique_ptr<Expr> parseBitwiseAnd();
     std::unique_ptr<Expr> parseEquality();
     std::unique_ptr<Expr> parseComparison();
+    std::unique_ptr<Expr> parseShift();
     std::unique_ptr<Expr> parseTerm();
     std::unique_ptr<Expr> parseFactor();
     std::unique_ptr<Expr> parsePower();
