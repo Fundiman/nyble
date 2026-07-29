@@ -13,7 +13,7 @@ njs: $(OBJS)
 %.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-main.o: src/main.cpp src/nyblejs.h src/value.h src/lexer.h src/ast.h src/parser.h src/env.h src/interp.h src/builtins.h src/gc.h src/bytecode.h src/compiler.h src/vm.h src/quotes.h
+main.o: src/main.cpp src/nyblejs.h src/value.h src/lexer.h src/ast.h src/parser.h src/env.h src/interp.h src/builtins.h src/gc.h src/bytecode.h src/compiler.h src/vm.h src/cats.h
 gc.o: src/gc.cpp src/gc.h src/value.h
 value.o: src/value.cpp src/value.h src/gc.h src/env.h
 env.o: src/env.cpp src/env.h src/value.h src/gc.h

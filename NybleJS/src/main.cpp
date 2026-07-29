@@ -16,7 +16,7 @@
 #define NYBLE_VM_THRESHOLD 300
 #endif
 
-static const char* NYBLE_VERSION = "0.5";
+static const char* NYBLE_VERSION = "0.6";
 static const char* NYBLE_VERSION_NAME = "AttentionIsAllYouNeed";
 
 // ANSI color codes
@@ -36,19 +36,9 @@ static const char* C_GRAY    = "\033[90m";
 enum class EngineMode { Auto, TreeWalk, BytecodeVM, JIT };
 
 static void printMeow() {
-    seed_once();
-    bool isFact = rand() % 2;
-    const char* author;
-    const char* text;
-    if (isFact) {
-        Fact f = get_fact();
-        author = f.author;
-        text = f.text;
-    } else {
-        Quote q = get_quote();
-        author = q.author;
-        text = q.text;
-    }
+    Entry e = get_wisdom();
+    const char* author = e.author;
+    const char* text = e.text;
     std::cout << "\n"
               << C_WHITE
               << "  /\\_/\\  \n"

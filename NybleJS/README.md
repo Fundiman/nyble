@@ -1,4 +1,4 @@
-# NybleJS - Lightweight JavaScript Engine v0.5 (AttentionIsAllYouNeed)
+# NybleJS - Lightweight JavaScript Engine v0.6 (AttentionIsAllYouNeed)
 
 A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
