@@ -450,13 +450,13 @@ Value Interpreter::evalMember(MemberExprNode* expr) {
         if (propName == "length") return Value::makeNum((double)obj.arrVal->elements.size());
         if (propName == "push")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
-                for(const auto& v:a)arrPtr->elements.push_back(v); return Value::makeNum((double)arrPtr->elements.size());});
+                for(const auto& v:a) { arrPtr->elements.push_back(v); } return Value::makeNum((double)arrPtr->elements.size());});
         if (propName == "pop")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
-                if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
+                if(arrPtr->elements.empty()) { return Value::makeUndefined(); } Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
         if (propName == "shift")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
-                if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
+                if(arrPtr->elements.empty()) { return Value::makeUndefined(); } Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
         if (propName == "unshift")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                 arrPtr->elements.insert(arrPtr->elements.begin(),a.begin(),a.end()); return Value::makeNum((double)arrPtr->elements.size());});
@@ -478,12 +478,12 @@ Value Interpreter::evalMember(MemberExprNode* expr) {
         if (propName == "slice")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                 int s=a.empty()?0:(int)a[0].toNumber(); int e=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
-                if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); if(e<0)e=std::max(0,(int)arrPtr->elements.size()+e);
+                if(s<0) { s=std::max(0,(int)arrPtr->elements.size()+s); } if(e<0) { e=std::max(0,(int)arrPtr->elements.size()+e); }
                 Value r=Value::makeArr(); for(int i=s;i<e&&i<(int)arrPtr->elements.size();i++)r.arrVal->elements.push_back(arrPtr->elements[i]); return r;});
         if (propName == "splice")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                 int s=a.empty()?0:(int)a[0].toNumber(); int dc=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
-                if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); dc=std::min(dc,(int)arrPtr->elements.size()-s);
+                if(s<0) { s=std::max(0,(int)arrPtr->elements.size()+s); } dc=std::min(dc,(int)arrPtr->elements.size()-s);
                 Value rem=Value::makeArr(); auto it=arrPtr->elements.begin()+s;
                 for(int i=0;i<dc;i++)rem.arrVal->elements.push_back(*(it+i));
                 arrPtr->elements.erase(it,it+dc);
@@ -703,6 +703,11 @@ Value Interpreter::callValue(const Value& fn, const std::vector<Value>& args, Va
     }
     if (fn.type == ValueType::Function) {
         auto funcData = fn.funcVal;
+        if (funcData->chunk) {
+            // Compiled by the bytecode VM — route through the global call
+            // dispatcher (the VM or a Context) instead of evaluating here.
+            if (g_callFunction) return g_callFunction(fn, args, thisArg);
+        }
         auto prev = currentEnv;
         currentEnv = funcData->closure->createChild();
         if (!funcData->isArrow) {

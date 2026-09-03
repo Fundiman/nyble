@@ -2,10 +2,19 @@
 
 namespace nyble {
 
-Compiler::Compiler(BytecodeChunk* c) : chunk(c), scopeDepth(0), loopStart(0), hasLoop(false) {}
+Compiler::Compiler(BytecodeChunk* c) : chunk(c), scopeDepth(0), loopStart(0), hasLoop(false), keepResult(false) {}
 
 void Compiler::compile(Program& prog) {
-    for (auto& stmt : prog.stmts) compileStmt(stmt.get());
+    for (size_t i = 0; i < prog.stmts.size(); i++) {
+        auto& stmt = prog.stmts[i];
+        bool last = keepResult && (i + 1 == prog.stmts.size());
+        if (last && stmt->type == ASTType::ExprStmt) {
+            compileExpr(static_cast<ExprStmtNode*>(stmt.get())->expr.get());
+            // no POP: leave the value on the stack so VM::run returns it
+        } else {
+            compileStmt(stmt.get());
+        }
+    }
     emit(OpCode::HALT);
 }
 

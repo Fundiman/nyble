@@ -11,4 +11,5 @@
 #include "bytecode.h"
 #include "compiler.h"
 #include "vm.h"
+#include "context.h"
 #include "cats.h"

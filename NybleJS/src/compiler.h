@@ -9,6 +9,10 @@ struct Compiler {
     int scopeDepth;
     size_t loopStart;
     bool hasLoop;
+    // When true, the value of the final top-level expression statement is left
+    // on the stack (no POP) so the VM can return it. Used by the REPL to echo
+    // bare expression results without requiring console.log.
+    bool keepResult;
 
     Compiler(BytecodeChunk* c);
 

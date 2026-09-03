@@ -1,4 +1,4 @@
-# NybleJS - Lightweight JavaScript Engine v0.6 (AttentionIsAllYouNeed)
+# NybleJS - Lightweight JavaScript Engine v0.7 (AttentionIsAllYouNeed)
 
 A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
 
@@ -99,10 +99,12 @@ A from-scratch JavaScript engine written in C++17, optimized for performance. Im
 - Java-style CLI options (`-Xmx`, `-engine`, `-c`, `-Dkey=value`)
 - `--meow` flag: ASCII cat with a random quote or cat fact
 - Single-header include (`src/nyblejs.h`) for embedding as a library
+- `nyble::Context`: V8-like embedding API — auto-selects tree/VM per script, roots the GC, keeps code alive across scripts, unifies JS exceptions (`src/context.h`)
 - File execution: `njs script.js`
 - Makefile build system (multi-file compilation)
 
 ## Not Yet Implemented
+- `class` declarations (the keyword is lexed, but there is no parser/engine support — use prototype-based inheritance instead)
 - Generators / async / await
 - `Proxy`, `Reflect`, `Symbol`
 - `Map`, `Set`, `WeakMap`, `WeakSet`
@@ -189,13 +191,109 @@ Examples:
 | Ctrl+C | Cancel current line |
 | Ctrl+D | Exit REPL |
 
-### Embedding as a Library
+The REPL also works in **piped / non-interactive mode** (`echo "1 + 1" | njs` or `njs < script.js`): it reads lines from stdin, evaluates each, and prints results — no banner or prompts. Bare expressions echo their value (`69 > 67` → `true`), with an optional trailing semicolon; declarations (`let`, `function`) do not echo. Multi-line constructs (unbalanced `{`/`(`/`[`) continue reading until they close. Ctrl+D (EOF) ends a piped session.
 
-Include the single header for use in other C++ projects:
+### Embedding in Your Own App
+
+NybleJS is embeddable as a library — your app is the host, NybleJS is the JS engine (like V8 in Chrome). Include the single header, then compile the engine sources (everything in `src/` except `main.cpp`, which defines the CLI/REPL) alongside your project, or link against the compiled object files:
+
 ```cpp
 #include "src/nyblejs.h"
 ```
-Link against the compiled object files or compile `src/*.cpp` alongside your project.
+
+#### Recommended: `nyble::Context`
+
+`Context` is the V8-style entry point: one call runs a script, it **auto-selects** between the tree-walking interpreter and the bytecode VM per script, roots the garbage collector for you, keeps code alive so functions persist across scripts, and unifies JS exceptions into `NybleRuntimeError`:
+
+```cpp
+#include <iostream>
+#include "src/nyblejs.h"
+
+int main() {
+    // 1. One context = one shared global scope (like a V8 context/global object)
+    nyble::Context ctx;
+
+    // 2. Register a native C++ function — callable from JS immediately
+    //    NativeFn = Value(const std::vector<Value>& args, const Value& thisVal)
+    ctx.define("addCpp", [](const std::vector<nyble::Value>& a, const nyble::Value&) -> nyble::Value {
+        return nyble::Value::makeNum(a[0].toNumber() + a[1].toNumber());
+    });
+
+    // 3. Run a script — engine picked automatically (tree < 300 AST nodes, VM otherwise)
+    nyble::Value result;
+    if (!ctx.evaluate("let x = addCpp(2, 3);", result)) {
+        for (auto& err : ctx.parseErrors()) std::cerr << err << "\n";  // parse error
+        return 1;
+    }
+    std::cout << result.toNumber() << "\n";  // 5
+
+    // 4. State persists across scripts; JS errors come back as C++ exceptions
+    ctx.evaluate("function double(n) { return n * 2; }", result);
+    try {
+        std::cout << ctx.call(ctx.get("double"), {nyble::Value::makeNum(21)}).toNumber() << "\n";  // 42
+    } catch (const nyble::NybleRuntimeError& e) {
+        std::cerr << "Uncaught: " << e.error.toString() << "\n";
+    }
+    return 0;
+}
+```
+
+`Context` API: `evaluate(source, result)` (returns `false` on parse errors, throws `NybleRuntimeError` on uncaught JS errors), `define(name, value-or-native)`, `get(name)`, `call(fn, args, thisArg)`, `parseErrors()`, `setEngine(Context::Engine::Auto|Tree|VM)`, `setVmThreshold(n)`, `lastEngine()`, `globalEnv()`. `VM` and `Interpreter` are unchanged and still usable directly.
+
+#### Manual engine control
+
+If you want explicit control (or to embed both engines side by side), use `VM` or `Interpreter` directly:
+
+```cpp
+#include <iostream>
+#include "src/nyblejs.h"
+
+int main() {
+    // 1. Engine instance (constructor installs console/Math/Date/etc. on globalEnv)
+    nyble::VM vm;
+
+    // 2. Root the GC at the engine (like V8 handles) — required
+    nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
+        if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
+    };
+
+    // 3. Register a native C++ function — now callable from JS
+    vm.globalEnv->define("addCpp", nyble::Value::makeNative(
+        [](const std::vector<nyble::Value>& a, const nyble::Value&) -> nyble::Value {
+            return nyble::Value::makeNum(a[0].toNumber() + a[1].toNumber());
+        }));
+
+    // 4. Parse -> compile -> run
+    std::string source = "console.log(addCpp(2, 3));";
+    nyble::Lexer lexer(source);
+    auto tokens = lexer.tokenize();
+    nyble::Parser parser(tokens);
+    auto program = parser.parse();
+    if (!parser.getErrors().empty()) { /* handle parse errors */ }
+
+    nyble::BytecodeChunk chunk;
+    nyble::Compiler comp(&chunk);
+    comp.compile(program);
+
+    try {
+        vm.run(&chunk, vm.globalEnv);
+    } catch (const nyble::VMThrow& t) {            // JS exception from the VM engine
+        std::cerr << "Uncaught: " << t.value.toString() << "\n";
+    } catch (const nyble::NybleRuntimeError& e) {  // JS exception thrown by a native
+        std::cerr << "Uncaught: " << e.error.toString() << "\n";
+    }
+    return 0;
+}
+```
+
+Notes for hosts:
+- **Two engines**: `nyble::Interpreter` (tree-walker, best for small scripts) and `nyble::VM` (bytecode, best for large scripts). Both install builtins on their `globalEnv`. For the interpreter, catch `Interpreter::ThrowSignal` instead of `VMThrow`. `Context` auto-selects between them per script and routes calls across engines (a tree-defined function is callable from a VM script and vice versa).
+- **Keeping code alive**: functions hold raw pointers into their parsed AST (tree engine) or bytecode chunk (VM). `Context` retains every script it runs, so cross-script functions stay valid. If you use `VM`/`Interpreter` directly, keep the `Program`/`BytecodeChunk` alive as long as any function value from it is in use.
+- **Calling JS from C++**: `vm.callValue(fn, args, thisArg)` (`src/vm.h`), or `ctx.call(fn, args, thisArg)` — grab a JS function with `globalEnv->get("name")` / `ctx.get("name")` and call it back.
+- **Throwing JS errors from natives**: `throw nyble::NybleRuntimeError(nyble::Value::makeTypeError("..."));` (also `makeReferenceError`, `makeRangeError`, `makeSyntaxError`).
+- **`this` binding**: native methods registered on an object receive the receiver as the second `NativeFn` argument, so method-style calls work.
+- **One engine per process**: `gHeap` and the global prototypes (`gObjectPrototype`, ...) are process-wide singletons (`src/value.h`, `src/gc.h`), so you cannot create multiple isolated contexts like Chrome's tabs — the main thing missing versus V8.
+- **Registering native classes/types**: not supported yet. There is no `External`-style C++ pointer binding and the GC has no finalizer hooks, so only native *functions* can be registered. You can hand-roll a wrapper `GCObject` (stash a pointer in a property) but must manage the C++ object's lifetime yourself.
 
 ## Performance
 

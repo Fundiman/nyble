@@ -16,7 +16,7 @@
 #define NYBLE_VM_THRESHOLD 300
 #endif
 
-static const char* NYBLE_VERSION = "0.6";
+static const char* NYBLE_VERSION = "0.7";
 static const char* NYBLE_VERSION_NAME = "AttentionIsAllYouNeed";
 
 // ANSI color codes
@@ -172,160 +172,6 @@ static CliOptions parseArgs(int argc, char* argv[]) {
     return opts;
 }
 
-namespace {
-
-size_t countExpr(const nyble::Expr* expr);
-size_t countStmt(const nyble::Stmt* stmt);
-
-size_t countExpr(const nyble::Expr* expr) {
-    if (!expr) return 0;
-    size_t n = 1;
-    switch (expr->type) {
-        case nyble::ASTType::Binary: {
-            auto* b = static_cast<const nyble::BinaryExprNode*>(expr);
-            n += countExpr(b->left.get()) + countExpr(b->right.get());
-            break;
-        }
-        case nyble::ASTType::Unary: {
-            auto* u = static_cast<const nyble::UnaryExprNode*>(expr);
-            n += countExpr(u->operand.get());
-            break;
-        }
-        case nyble::ASTType::Call: {
-            auto* c = static_cast<const nyble::CallExprNode*>(expr);
-            n += countExpr(c->callee.get());
-            for (auto& a : c->args) n += countExpr(a.get());
-            break;
-        }
-        case nyble::ASTType::Member: {
-            auto* m = static_cast<const nyble::MemberExprNode*>(expr);
-            n += countExpr(m->object.get()) + countExpr(m->property.get());
-            break;
-        }
-        case nyble::ASTType::ArrayLit: {
-            auto* a = static_cast<const nyble::ArrayLitNode*>(expr);
-            for (auto& e : a->elements) n += countExpr(e.get());
-            break;
-        }
-        case nyble::ASTType::ObjectLit: {
-            auto* o = static_cast<const nyble::ObjectLitNode*>(expr);
-            for (auto& [k, v] : o->properties) n += countExpr(v.get());
-            break;
-        }
-        case nyble::ASTType::Assignment: {
-            auto* a = static_cast<const nyble::AssignNode*>(expr);
-            n += countExpr(a->target.get()) + countExpr(a->value.get());
-            break;
-        }
-        case nyble::ASTType::Conditional: {
-            auto* c = static_cast<const nyble::ConditionalNode*>(expr);
-            n += countExpr(c->cond.get()) + countExpr(c->thenExpr.get()) + countExpr(c->elseExpr.get());
-            break;
-        }
-        case nyble::ASTType::ArrowFunc: {
-            auto* a = static_cast<const nyble::ArrowFuncNode*>(expr);
-            n += countStmt(a->body.get()) + countExpr(a->exprBody.get());
-            break;
-        }
-        case nyble::ASTType::New: {
-            auto* n2 = static_cast<const nyble::NewExprNode*>(expr);
-            n += countExpr(n2->callee.get());
-            for (auto& a : n2->args) n += countExpr(a.get());
-            break;
-        }
-        case nyble::ASTType::Identifier:
-        case nyble::ASTType::Literal:
-            break;
-        default: break;
-    }
-    return n;
-}
-
-size_t countStmt(const nyble::Stmt* stmt) {
-    if (!stmt) return 0;
-    size_t n = 1;
-    switch (stmt->type) {
-        case nyble::ASTType::Block: {
-            auto* b = static_cast<const nyble::BlockStmt*>(stmt);
-            for (auto& s : b->stmts) n += countStmt(s.get());
-            break;
-        }
-        case nyble::ASTType::ExprStmt: {
-            auto* e = static_cast<const nyble::ExprStmtNode*>(stmt);
-            n += countExpr(e->expr.get());
-            break;
-        }
-        case nyble::ASTType::VarDecl: {
-            auto* v = static_cast<const nyble::VarDeclNode*>(stmt);
-            n += countExpr(v->initializer.get());
-            break;
-        }
-        case nyble::ASTType::FunDecl: {
-            auto* f = static_cast<const nyble::FunDeclNode*>(stmt);
-            n += countStmt(f->body.get());
-            break;
-        }
-        case nyble::ASTType::If: {
-            auto* i = static_cast<const nyble::IfNode*>(stmt);
-            n += countExpr(i->cond.get()) + countStmt(i->thenBranch.get()) + countStmt(i->elseBranch.get());
-            break;
-        }
-        case nyble::ASTType::While: {
-            auto* w = static_cast<const nyble::WhileNode*>(stmt);
-            n += countExpr(w->cond.get()) + countStmt(w->body.get());
-            break;
-        }
-        case nyble::ASTType::DoWhile: {
-            auto* d = static_cast<const nyble::DoWhileNode*>(stmt);
-            n += countStmt(d->body.get()) + countExpr(d->cond.get());
-            break;
-        }
-        case nyble::ASTType::For: {
-            auto* f = static_cast<const nyble::ForNode*>(stmt);
-            n += countStmt(f->init.get()) + countExpr(f->cond.get()) + countExpr(f->inc.get()) + countStmt(f->body.get());
-            break;
-        }
-        case nyble::ASTType::Return: {
-            auto* r = static_cast<const nyble::ReturnNode*>(stmt);
-            n += countExpr(r->value.get());
-            break;
-        }
-        case nyble::ASTType::Switch: {
-            auto* s = static_cast<const nyble::SwitchNode*>(stmt);
-            n += countExpr(s->expr.get());
-            for (auto& [c, stmts] : s->cases) {
-                n += countExpr(c.get());
-                for (auto& ss : stmts) n += countStmt(ss.get());
-            }
-            for (auto& ss : s->defaultCase) n += countStmt(ss.get());
-            break;
-        }
-        case nyble::ASTType::Throw: {
-            auto* t = static_cast<const nyble::ThrowNode*>(stmt);
-            n += countExpr(t->value.get());
-            break;
-        }
-        case nyble::ASTType::Try: {
-            auto* t = static_cast<const nyble::TryNode*>(stmt);
-            n += countStmt(t->tryBlock.get()) + countStmt(t->catchBlock.get()) + countStmt(t->finallyBlock.get());
-            break;
-        }
-        case nyble::ASTType::Break:
-        case nyble::ASTType::Continue:
-            break;
-        default: break;
-    }
-    return n;
-}
-
-size_t countAST(const nyble::Program& prog) {
-    size_t n = 0;
-    for (auto& s : prog.stmts) n += countStmt(s.get());
-    return n;
-}
-
-} // anonymous namespace
-
 static size_t detectSystemMemoryMB() {
 #ifdef _WIN32
     MEMORYSTATUSEX status;
@@ -403,6 +249,12 @@ static void printHighlighted(const std::string& input) {
 #ifdef _WIN32
 static HANDLE hStdin = nullptr;
 static DWORD origConsoleMode = 0;
+
+static bool stdinIsTTY() {
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    return h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode) != 0;
+}
 
 static void enableRawMode() {
     hStdin = GetStdHandle(STD_INPUT_HANDLE);
@@ -497,7 +349,7 @@ int main(int argc, char* argv[]) {
         }
 
         try {
-            size_t complexity = countAST(program);
+            size_t complexity = nyble::countAST(program);
 
             auto runTreeWalk = [&](nyble::Program& prog) {
                 nyble::Interpreter interp;
@@ -546,16 +398,19 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // REPL
+    // REPL - interactive (TTY) and piped (non-TTY) modes
     nyble::VM vm;
     nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
         if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
     };
 
-    std::cout << C_ORANGE << "Nyble" << C_YELLOW << "JS " << C_RESET << C_WHITE << "v" << NYBLE_VERSION << C_RESET << " " << C_GRAY << "(" << NYBLE_VERSION_NAME << ")" << C_RESET << " - JavaScript Engine\n";
-    std::cout << C_DIM << "Type 'exit' to quit" << C_RESET << "\n\n";
+    bool piped = !stdinIsTTY();
 
-    enableRawMode();
+    if (!piped) {
+        std::cout << C_ORANGE << "Nyble" << C_YELLOW << "JS " << C_RESET << C_WHITE << "v" << NYBLE_VERSION << C_RESET << " " << C_GRAY << "(" << NYBLE_VERSION_NAME << ")" << C_RESET << " - JavaScript Engine\n";
+        std::cout << C_DIM << "Type 'exit' to quit" << C_RESET << "\n\n";
+        enableRawMode();
+    }
 
     std::string source;
 
@@ -569,76 +424,118 @@ int main(int argc, char* argv[]) {
         std::cout << std::flush;
     };
 
+    // Heuristic: is this input an unfinished multi-line construct (rather than a
+    // complete expression missing a trailing semicolon)?
+    auto looksIncomplete = [](const std::string& src) -> bool {
+        int braces = 0, parens = 0, brackets = 0;
+        bool inStr = false, inComment = false;
+        char strCh = 0;
+        for (size_t i = 0; i < src.size(); i++) {
+            char c = src[i];
+            if (inComment) {
+                if (c == '\n') inComment = false;
+                continue;
+            }
+            if (i + 1 < src.size() && c == '/' && src[i+1] == '/') { inComment = true; i++; continue; }
+            if (inStr) {
+                if (c == '\\') { i++; continue; }
+                if (c == strCh) inStr = false;
+                continue;
+            }
+            if (c == '"' || c == '\'') { inStr = true; strCh = c; continue; }
+            switch (c) {
+                case '{': braces++; break;
+                case '}': braces--; break;
+                case '(': parens++; break;
+                case ')': parens--; break;
+                case '[': brackets++; break;
+                case ']': brackets--; break;
+            }
+        }
+        if (braces > 0 || parens > 0 || brackets > 0) return true;
+        size_t last = src.find_last_not_of(" \t\r\n");
+        if (last != std::string::npos) {
+            char lc = src[last];
+            if (std::string("+-*/,.").find(lc) != std::string::npos) return true;
+        }
+        return false;
+    };
+
     while (true) {
         std::string lineBuffer;
         size_t cursorPos = 0;
         std::string prompt = source.empty() ? "> " : "  ";
 
-        std::cout << prompt << std::flush;
+        if (piped) {
+            // Non-interactive: read a whole line; EOF ends the session.
+            if (!std::getline(std::cin, lineBuffer)) break;
+        } else {
+            std::cout << prompt << std::flush;
 
-        while (true) {
-            int ch = readKey();
+            while (true) {
+                int ch = readKey();
 
-            if (ch == '\r' || ch == '\n') {
-                std::cout << "\n" << std::flush;
-                break;
-            }
-
-            if (ch == 3) { // Ctrl+C
-                std::cout << "^C\n" << std::flush;
-                lineBuffer.clear();
-                source.clear();
-                break;
-            }
-
-            if (ch == 4) { // Ctrl+D
-                disableRawMode();
-                std::cout << "\n" << std::flush;
-                return 0;
-            }
-
-            if (ch == 127 || ch == 8) { // Backspace
-                if (cursorPos > 0) {
-                    lineBuffer.erase(cursorPos - 1, 1);
-                    cursorPos--;
+                if (ch == '\r' || ch == '\n') {
+                    std::cout << "\n" << std::flush;
+                    break;
                 }
-            } else if (ch == 1) { // Ctrl+A - home
-                cursorPos = 0;
-            } else if (ch == 5) { // Ctrl+E - end
-                cursorPos = lineBuffer.size();
-            } else if (ch == 11) { // Ctrl+K - kill to end
-                lineBuffer.resize(cursorPos);
-            } else if (ch == 21) { // Ctrl+U - kill to start
-                lineBuffer.erase(0, cursorPos);
-                cursorPos = 0;
-            } else if (ch == 23) { // Ctrl+W - delete word back
-                while (cursorPos > 0 && lineBuffer[cursorPos - 1] == ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
-                while (cursorPos > 0 && lineBuffer[cursorPos - 1] != ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
-            } else if (ch == 0x100) { // Up
-                // no-op for single-line
-            } else if (ch == 0x101) { // Down
-                // no-op for single-line
-            } else if (ch == 0x102) { // Left
-                if (cursorPos > 0) cursorPos--;
-            } else if (ch == 0x103) { // Right
-                if (cursorPos < lineBuffer.size()) cursorPos++;
-            } else if (ch == 0x104) { // Home
-                cursorPos = 0;
-            } else if (ch == 0x105) { // End
-                cursorPos = lineBuffer.size();
-            } else if (ch == 0x106) { // Delete
-                if (cursorPos < lineBuffer.size()) lineBuffer.erase(cursorPos, 1);
-            } else if (ch >= 32 && ch < 127) {
-                lineBuffer.insert(lineBuffer.begin() + cursorPos, (char)ch);
-                cursorPos++;
+
+                if (ch == 3) { // Ctrl+C
+                    std::cout << "^C\n" << std::flush;
+                    lineBuffer.clear();
+                    source.clear();
+                    break;
+                }
+
+                if (ch == 4) { // Ctrl+D
+                    disableRawMode();
+                    std::cout << "\n" << std::flush;
+                    return 0;
+                }
+
+                if (ch == 127 || ch == 8) { // Backspace
+                    if (cursorPos > 0) {
+                        lineBuffer.erase(cursorPos - 1, 1);
+                        cursorPos--;
+                    }
+                } else if (ch == 1) { // Ctrl+A - home
+                    cursorPos = 0;
+                } else if (ch == 5) { // Ctrl+E - end
+                    cursorPos = lineBuffer.size();
+                } else if (ch == 11) { // Ctrl+K - kill to end
+                    lineBuffer.resize(cursorPos);
+                } else if (ch == 21) { // Ctrl+U - kill to start
+                    lineBuffer.erase(0, cursorPos);
+                    cursorPos = 0;
+                } else if (ch == 23) { // Ctrl+W - delete word back
+                    while (cursorPos > 0 && lineBuffer[cursorPos - 1] == ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
+                    while (cursorPos > 0 && lineBuffer[cursorPos - 1] != ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
+                } else if (ch == 0x100) { // Up
+                    // no-op for single-line
+                } else if (ch == 0x101) { // Down
+                    // no-op for single-line
+                } else if (ch == 0x102) { // Left
+                    if (cursorPos > 0) cursorPos--;
+                } else if (ch == 0x103) { // Right
+                    if (cursorPos < lineBuffer.size()) cursorPos++;
+                } else if (ch == 0x104) { // Home
+                    cursorPos = 0;
+                } else if (ch == 0x105) { // End
+                    cursorPos = lineBuffer.size();
+                } else if (ch == 0x106) { // Delete
+                    if (cursorPos < lineBuffer.size()) lineBuffer.erase(cursorPos, 1);
+                } else if (ch >= 32 && ch < 127) {
+                    lineBuffer.insert(lineBuffer.begin() + cursorPos, (char)ch);
+                    cursorPos++;
+                }
+
+                rerender(prompt, lineBuffer, cursorPos);
             }
 
-            rerender(prompt, lineBuffer, cursorPos);
-        }
-
-        if (source.empty() && lineBuffer == "exit") {
-            disableRawMode();
-            break;
+            if (source.empty() && lineBuffer == "exit") {
+                disableRawMode();
+                break;
+            }
         }
 
         if (lineBuffer.empty() && source.empty()) continue;
@@ -646,32 +543,46 @@ int main(int argc, char* argv[]) {
         source += lineBuffer + "\n";
 
         nyble::Lexer lexer(source);
-        auto tokens = lexer.tokenize();
+        nyble::Program program;
+        std::vector<std::string> parseErrors;
+        std::unique_ptr<nyble::Program> progPtr;
 
-        nyble::Parser parser(tokens);
-        auto program = parser.parse();
+        {
+            nyble::Parser p(lexer.tokenize());
+            program = p.parse();
+            if (!p.getErrors().empty()) parseErrors = p.getErrors();
+        }
 
-        if (!parser.getErrors().empty()) {
-            bool incomplete = false;
-            for (const auto& err : parser.getErrors()) {
-                if (err.find("Expected") != std::string::npos) {
-                    incomplete = true;
-                }
+        // A complete expression like `69 > 67` with no trailing ';' fails to
+        // parse. Retry with one appended so the REPL echoes values without
+        // needing an ASI implementation in the parser itself.
+        if (!parseErrors.empty() && !looksIncomplete(source)) {
+            nyble::Parser r(nyble::Lexer(source + ";").tokenize());
+            auto rp = r.parse();
+            if (r.getErrors().empty()) {
+                progPtr = std::make_unique<nyble::Program>(std::move(rp));
+                parseErrors.clear();
             }
-            if (incomplete && source.find(';') == std::string::npos) {
-                continue;
+        }
+
+        if (!parseErrors.empty()) {
+            if (looksIncomplete(source)) {
+                continue; // wait for more lines (multi-line input)
             }
-            for (const auto& err : parser.getErrors()) {
+            for (const auto& err : parseErrors) {
                 std::cerr << C_RED << err << C_RESET << "\n";
             }
             source.clear();
             continue;
         }
 
+        nyble::Program& toCompile = progPtr ? *progPtr : program;
+
         try {
             nyble::BytecodeChunk chunk;
             nyble::Compiler comp(&chunk);
-            comp.compile(program);
+            comp.keepResult = true; // echo the value of the last expression in the REPL
+            comp.compile(toCompile);
             try {
                 auto result = vm.run(&chunk, vm.globalEnv);
                 if (result.type != nyble::ValueType::Undefined && result.type != nyble::ValueType::Null) {

@@ -2,6 +2,18 @@
 
 namespace nyble {
 
+namespace {
+
+// The temporary Interpreter used to evaluate tree-AST functions overwrites the
+// global call dispatcher in its constructor; this restores it afterwards.
+struct CallFnGuard {
+    decltype(g_callFunction) saved;
+    CallFnGuard() : saved(g_callFunction) {}
+    ~CallFnGuard() { g_callFunction = saved; }
+};
+
+}
+
 VM::VM() {
     globalEnv = std::make_shared<Environment>();
     installBuiltins(globalEnv);
@@ -126,8 +138,9 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
             case OpCode::STORE: {
                 uint16_t idx = readShort(cf);
                 const std::string& name = cf.chunk->strConstants[idx];
+                Value v = stack.back(); stack.pop_back();
                 if (!cf.env->exists(name)) cf.env->define(name, Value::makeUndefined());
-                cf.env->set(name, stack.back());
+                cf.env->set(name, v);
                 break;
             }
 
@@ -375,6 +388,7 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
                         }
                     } else {
                         stack.clear();
+                        CallFnGuard _guard;
                         Interpreter sub;
                         sub.currentEnv = newEnv;
                         Value result;
@@ -441,6 +455,7 @@ Value VM::run(BytecodeChunk* chunk, std::shared_ptr<Environment> env) {
                         }
                     } else {
                         stack.clear();
+                        CallFnGuard _guard;
                         Interpreter sub;
                         sub.currentEnv = newEnv;
                         Value result;
@@ -623,6 +638,7 @@ Value VM::callValue(const Value& fn, const std::vector<Value>& args, Value thisA
         }
 
         stack.clear();
+        CallFnGuard _guard;
         Interpreter sub;
         sub.currentEnv = newEnv;
         Value result;
@@ -698,13 +714,13 @@ Value VM::getProperty(const Value& obj, const std::string& name) {
         if (name == "length") return Value::makeNum((double)obj.arrVal->elements.size());
         if (name == "push")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
-                for(const auto& v:a)arrPtr->elements.push_back(v); return Value::makeNum((double)arrPtr->elements.size());});
+                for(const auto& v:a) { arrPtr->elements.push_back(v); } return Value::makeNum((double)arrPtr->elements.size());});
         if (name == "pop")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
-                if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
+                if(arrPtr->elements.empty()) { return Value::makeUndefined(); } Value v=arrPtr->elements.back(); arrPtr->elements.pop_back(); return v;});
         if (name == "shift")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>&, const Value&) mutable->Value{
-                if(arrPtr->elements.empty())return Value::makeUndefined(); Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
+                if(arrPtr->elements.empty()) { return Value::makeUndefined(); } Value v=arrPtr->elements.front(); arrPtr->elements.erase(arrPtr->elements.begin()); return v;});
         if (name == "unshift")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                 arrPtr->elements.insert(arrPtr->elements.begin(),a.begin(),a.end()); return Value::makeNum((double)arrPtr->elements.size());});
@@ -726,12 +742,12 @@ Value VM::getProperty(const Value& obj, const std::string& name) {
         if (name == "slice")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&)->Value{
                 int s=a.empty()?0:(int)a[0].toNumber(); int e=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
-                if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); if(e<0)e=std::max(0,(int)arrPtr->elements.size()+e);
+                if(s<0) { s=std::max(0,(int)arrPtr->elements.size()+s); } if(e<0) { e=std::max(0,(int)arrPtr->elements.size()+e); }
                 Value r=Value::makeArr(); for(int i=s;i<e&&i<(int)arrPtr->elements.size();i++)r.arrVal->elements.push_back(arrPtr->elements[i]); return r;});
         if (name == "splice")
             return Value::makeNative([arrPtr=obj.arrVal](const std::vector<Value>& a, const Value&) mutable->Value{
                 int s=a.empty()?0:(int)a[0].toNumber(); int dc=a.size()<2?(int)arrPtr->elements.size():(int)a[1].toNumber();
-                if(s<0)s=std::max(0,(int)arrPtr->elements.size()+s); dc=std::min(dc,(int)arrPtr->elements.size()-s);
+                if(s<0) { s=std::max(0,(int)arrPtr->elements.size()+s); } dc=std::min(dc,(int)arrPtr->elements.size()-s);
                 Value rem=Value::makeArr(); auto it=arrPtr->elements.begin()+s;
                 for(int i=0;i<dc;i++)rem.arrVal->elements.push_back(*(it+i));
                 arrPtr->elements.erase(it,it+dc);
