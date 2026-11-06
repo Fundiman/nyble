@@ -62,9 +62,17 @@ jobs:
           cp -r meson packages/libant/meson
 
       - name: Fetch vendored subprojects
+        # Meson's parallel downloader deadlocks on Windows NTFS
+        # (OSError errno 36); serial (-j 1) is slow but reliable.
         run: |
-          cd third_party/ant/packages/libant
-          bash scripts/setup.sh
+          cd third_party/ant
+          for attempt in 1 2 3; do
+            meson subprojects download -j 1 && break
+            echo "attempt $attempt failed, retrying..."
+            sleep 15
+          done
+          mkdir -p packages/libant/vendor packages/libant/build
+          rsync -a --copy-links --exclude='.git/' vendor/ packages/libant/vendor/
 
       - name: Build libant
         env:
