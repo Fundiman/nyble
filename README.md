@@ -3,6 +3,9 @@ Nyble is a web browser built from scratch designed for modern websites — think
 
 Most browsers need literal super computers to compile; Nyble does not.
 
+> [!NOTE]
+> This is build/libant-ci — this branch was made to build libant since we're throwing out Nyble's JS engine for `libant`. Well we're still thinking about it and it's not the final decision.
+
 # Frequently Asked Questions (FAQ)
 
 <details>
