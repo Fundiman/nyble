@@ -1,0 +1,4 @@
+[submodule "third_party/ant"]
+	path = third_party/ant
+	url = https://github.com/theMackabu/ant.git
+	branch = master
