@@ -57,12 +57,13 @@ jobs:
         # Windows checkout turns that into a text file; meson then can't
         # subdir() it. A copy is logically identical for meson's resolver.
         run: |
+          cd third_party/ant
           rm -f packages/libant/meson
           cp -r meson packages/libant/meson
 
       - name: Fetch vendored subprojects
         run: |
-          cd packages/libant
+          cd third_party/ant/packages/libant
           bash scripts/setup.sh
 
       - name: Build libant
@@ -72,17 +73,17 @@ jobs:
           CC: clang
           CXX: clang++
         run: |
-          cd packages/libant
+          cd third_party/ant/packages/libant
           bash scripts/compile.sh
           bash scripts/bundle.sh
 
       - name: Show artifact
         run: |
-          ls -lh packages/libant/dist/
+          ls -lh third_party/ant/packages/libant/dist/
 
       - name: Upload libant.a
         uses: actions/upload-artifact@v4
         with:
           name: libant-mingw64
-          path: packages/libant/dist/
+          path: third_party/ant/packages/libant/dist/
           if-no-files-found: error
