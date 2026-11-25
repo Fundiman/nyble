@@ -89,6 +89,15 @@ jobs:
           ./NybleJS/njs -c "console.log(typeof Nyble)"
           ./NybleJS/njs --meow | head -1
 
+      - name: Upload NybleJS
+        uses: actions/upload-artifact@v4
+        with:
+          name: nyblejs-njs-win64
+          path: |
+            NybleJS/njs.exe
+            NybleJS/njs
+          if-no-files-found: warn
+
       - name: Show artifact
         run: |
           ls -lh third_party/ant/build-embed/libant/lib/
