@@ -1,15 +1,16 @@
 #pragma once
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace nyble {
 
 // Stable façade over the Ant Silver engine (libant).
-// All Ant types stay inside ant_engine.cpp; the rest of Nyble deals in strings.
+// All Ant types stay inside the C bridge; the rest of Nyble deals in strings.
 // One Engine == one Ant isolate == one JS global scope.
 class Engine {
 public:
-    Engine(int argc = 0, char** argv = nullptr);
+    Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0);
     ~Engine();
 
     Engine(const Engine&) = delete;
@@ -20,6 +21,9 @@ public:
     //          display (empty for undefined/null).
     // Failure: returns false and fills errors() with the exception text.
     bool eval(const std::string& source, std::string& result);
+
+    // Define Nyble.props.<key> = <value> for `-D<key>=<value>`.
+    void setProp(const std::string& key, const std::string& value);
 
     // Pending promise jobs / timers. Call after a script finishes so async
     // work gets a chance to run before the process exits.

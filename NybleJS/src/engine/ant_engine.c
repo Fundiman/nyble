@@ -38,7 +38,7 @@ static char *nyble_strdup(const char *s) {
     return p;
 }
 
-nyble_engine *nyble_engine_create(int argc, char **argv) {
+nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
     nyble_engine *e = (nyble_engine *)calloc(1, sizeof(*e));
     if (!e) return NULL;
 
@@ -46,7 +46,11 @@ nyble_engine *nyble_engine_create(int argc, char **argv) {
     e->argv[0] = e->argv0;
     e->argv[1] = NULL;
 
-    e->js = Ant_Create(NULL);
+    ant_isolate_options_t options;
+    memset(&options, 0, sizeof(options));
+    options.object_arena_bytes = heap_bytes;
+
+    e->js = Ant_Create(heap_bytes ? &options : NULL);
     if (!e->js) {
         free(e);
         return NULL;
@@ -62,6 +66,25 @@ nyble_engine *nyble_engine_create(int argc, char **argv) {
     ant_bootstrap_modules(e->js);
 
     return e;
+}
+
+void nyble_engine_set_prop(nyble_engine *e, const char *key, const char *value) {
+    if (!e || !e->js || !key || !value) return;
+
+    ant_value_t global = js_glob(e->js);
+    ant_value_t nyble = js_get(e->js, global, "Nyble");
+    if (vtype(nyble) != kTypeObject) {
+        nyble = Ant_Object_Create(e->js);
+        js_set(e->js, global, "Nyble", nyble);
+    }
+
+    ant_value_t props = js_get(e->js, nyble, "props");
+    if (vtype(props) != kTypeObject) {
+        props = Ant_Object_Create(e->js);
+        js_set(e->js, nyble, "props", props);
+    }
+
+    js_set(e->js, props, key, js_mkstr(e->js, value, strlen(value)));
 }
 
 void nyble_engine_destroy(nyble_engine *e) {

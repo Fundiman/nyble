@@ -12,8 +12,11 @@ extern "C" {
 
 typedef struct nyble_engine nyble_engine;
 
-nyble_engine *nyble_engine_create(int argc, char **argv);
+nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes);
 void nyble_engine_destroy(nyble_engine *e);
+
+/* Define a CLI -D property as Nyble.props.<key> = <value>. */
+void nyble_engine_set_prop(nyble_engine *e, const char *key, const char *value);
 
 /* Evaluate NUL-terminated `src`. Returns 1 on success and stores a malloc'd,
  * display-ready string in *out (never NULL; empty string for undefined/null).

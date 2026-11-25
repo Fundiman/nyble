@@ -11,8 +11,8 @@ struct Engine::Impl {
     nyble_engine *engine = nullptr;
 };
 
-Engine::Engine(int argc, char **argv) : impl_(new Impl()) {
-    impl_->engine = nyble_engine_create(argc, argv);
+Engine::Engine(int argc, char **argv, size_t heapBytes) : impl_(new Impl()) {
+    impl_->engine = nyble_engine_create(argc, argv, heapBytes);
     if (!impl_->engine) {
         delete impl_;
         impl_ = nullptr;
@@ -45,6 +45,12 @@ bool Engine::eval(const std::string &source, std::string &result) {
         errors_.push_back("JavaScript error");
     }
     return ok;
+}
+
+void Engine::setProp(const std::string &key, const std::string &value) {
+    if (impl_ && impl_->engine) {
+        nyble_engine_set_prop(impl_->engine, key.c_str(), value.c_str());
+    }
 }
 
 void Engine::drainEventLoop() {

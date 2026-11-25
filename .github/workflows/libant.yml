@@ -51,13 +51,23 @@ jobs:
             git
             jq
 
-      - name: Fetch vendored subprojects
+      - name: Add mbedTLS backend to Ant
+        # Upstream still hard-wires BoringSSL; this patch adds the
+        # tls_backend=mbedtls option using tlsuv's existing mbedTLS engine.
+        run: git apply --directory=third_party/ant patches/libant-mbedtls.patch
+
+      - name: Fetch vendored subprojects (no BoringSSL)
         # Meson's parallel downloader deadlocks on Windows NTFS
         # (OSError errno 36); serial (-j 1) is slow but reliable.
+        # BoringSSL is skipped entirely: not downloaded, not built.
         run: |
           cd third_party/ant
+          wraps=$(for w in vendor/*.wrap; do
+            n=$(basename "$w" .wrap)
+            [ "$n" != boringssl ] && printf '%s ' "$n"
+          done)
           for attempt in 1 2 3; do
-            meson subprojects download -j 1 && break
+            meson subprojects download -j 1 $wraps && break
             echo "attempt $attempt failed, retrying..."
             sleep 15
           done
@@ -68,7 +78,7 @@ jobs:
           CXX: clang++
         run: |
           cd third_party/ant
-          meson setup build-embed --prefer-static -Db_lto=false -Dc_std=gnu2x
+          meson setup build-embed --prefer-static -Db_lto=false -Dc_std=gnu2x -Dtls_backend=mbedtls
           meson compile -C build-embed embed
 
       - name: Show artifact
