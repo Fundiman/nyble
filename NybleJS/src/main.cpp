@@ -10,7 +10,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
-#include "nyblejs.h"
+#include "cats.h"
+#include "engine/ant_engine.h"
 
 #ifndef NYBLE_VM_THRESHOLD
 #define NYBLE_VM_THRESHOLD 300
@@ -172,7 +173,7 @@ static CliOptions parseArgs(int argc, char* argv[]) {
     return opts;
 }
 
-static size_t detectSystemMemoryMB() {
+[[maybe_unused]] static size_t detectSystemMemoryMB() {
 #ifdef _WIN32
     MEMORYSTATUSEX status;
     status.dwLength = sizeof(status);
@@ -313,12 +314,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    size_t sysMemMB = detectSystemMemoryMB();
-    if (opts.memSet) {
-        nyble::gHeap.setMemoryBudget(opts.memBytes);
-    } else {
-        nyble::gHeap.setMemoryBudget((sysMemMB * 1024ULL * 1024ULL) / 8ULL);
-    }
+    (void)detectSystemMemoryMB; // kept for potential future diagnostics
 
     if (!opts.filename.empty() || !opts.code.empty()) {
         std::string source;
@@ -335,61 +331,19 @@ int main(int argc, char* argv[]) {
             source = buffer.str();
         }
 
-        nyble::Lexer lexer(source);
-        auto tokens = lexer.tokenize();
-
-        nyble::Parser parser(tokens);
-        auto program = parser.parse();
-
-        if (!parser.getErrors().empty()) {
-            for (const auto& err : parser.getErrors()) {
-                std::cerr << C_RED << err << C_RESET << "\n";
-            }
-            return 1;
-        }
-
         try {
-            size_t complexity = nyble::countAST(program);
+            nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0);
+            for (const auto& kv : opts.props) engine.setProp(kv.first, kv.second);
 
-            auto runTreeWalk = [&](nyble::Program& prog) {
-                nyble::Interpreter interp;
-                nyble::gHeap.rootTracer = [&interp](std::vector<nyble::GCHeader*>& wl) {
-                    if (interp.currentEnv) interp.currentEnv->traceGCValues(wl);
-                };
-                interp.evaluate(prog);
-            };
-
-            auto runVM = [&](nyble::Program& prog) {
-                nyble::BytecodeChunk chunk;
-                nyble::Compiler comp(&chunk);
-                comp.compile(prog);
-                nyble::VM vm;
-                nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
-                    if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
-                };
-                vm.run(&chunk, vm.globalEnv);
-            };
-
-            if (opts.engine == EngineMode::TreeWalk) {
-                runTreeWalk(program);
-            } else if (opts.engine == EngineMode::BytecodeVM) {
-                runVM(program);
-            } else {
-                if (complexity < NYBLE_VM_THRESHOLD) {
-                    runTreeWalk(program);
-                } else {
-                    runVM(program);
+            std::string result;
+            const bool ok = engine.eval(source, result);
+            engine.drainEventLoop();
+            if (!ok) {
+                for (const auto& err : engine.errors()) {
+                    std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << err << C_RESET << "\n";
                 }
+                return 1;
             }
-        } catch (const nyble::Interpreter::ThrowSignal& ts) {
-            std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << ts.value.toString() << C_RESET << "\n";
-            return 1;
-        } catch (const nyble::VMThrow& vt) {
-            std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << vt.value.toString() << C_RESET << "\n";
-            return 1;
-        } catch (const nyble::NybleRuntimeError& e) {
-            std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << e.error.toString() << C_RESET << "\n";
-            return 1;
         } catch (const std::exception& e) {
             std::cerr << C_RED << C_BOLD << "Internal Error: " << C_RESET << C_RED << e.what() << C_RESET << "\n";
             return 1;
@@ -399,10 +353,8 @@ int main(int argc, char* argv[]) {
     }
 
     // REPL - interactive (TTY) and piped (non-TTY) modes
-    nyble::VM vm;
-    nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
-        if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
-    };
+    nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0);
+    for (const auto& kv : opts.props) engine.setProp(kv.first, kv.second);
 
     bool piped = !stdinIsTTY();
 
@@ -424,8 +376,8 @@ int main(int argc, char* argv[]) {
         std::cout << std::flush;
     };
 
-    // Heuristic: is this input an unfinished multi-line construct (rather than a
-    // complete expression missing a trailing semicolon)?
+    // Heuristic: unfinished multi-line construct? (Ant handles ASI; this just
+    // keeps the old REPL feel for { / ( / [ blocks and trailing operators.)
     auto looksIncomplete = [](const std::string& src) -> bool {
         int braces = 0, parens = 0, brackets = 0;
         bool inStr = false, inComment = false;
@@ -464,33 +416,33 @@ int main(int argc, char* argv[]) {
     while (true) {
         std::string lineBuffer;
         size_t cursorPos = 0;
-        std::string prompt = source.empty() ? "> " : "  ";
 
         if (piped) {
-            // Non-interactive: read a whole line; EOF ends the session.
             if (!std::getline(std::cin, lineBuffer)) break;
         } else {
+            std::string prompt = source.empty() ? "> " : "... ";
             std::cout << prompt << std::flush;
+            rerender(prompt, lineBuffer, cursorPos);
 
             while (true) {
-                int ch = readKey();
-
-                if (ch == '\r' || ch == '\n') {
-                    std::cout << "\n" << std::flush;
-                    break;
-                }
-
+                int ch = readChar();
+                if (ch == -1) { disableRawMode(); return 0; }
                 if (ch == 3) { // Ctrl+C
-                    std::cout << "^C\n" << std::flush;
+                    std::cout << "\n" << prompt << std::flush;
                     lineBuffer.clear();
-                    source.clear();
-                    break;
+                    cursorPos = 0;
+                    rerender(prompt, lineBuffer, cursorPos);
+                    continue;
                 }
-
                 if (ch == 4) { // Ctrl+D
                     disableRawMode();
                     std::cout << "\n" << std::flush;
                     return 0;
+                }
+
+                if (ch == '\r' || ch == '\n') {
+                    std::cout << "\n" << std::flush;
+                    break;
                 }
 
                 if (ch == 127 || ch == 8) { // Backspace
@@ -511,9 +463,7 @@ int main(int argc, char* argv[]) {
                     while (cursorPos > 0 && lineBuffer[cursorPos - 1] == ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
                     while (cursorPos > 0 && lineBuffer[cursorPos - 1] != ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
                 } else if (ch == 0x100) { // Up
-                    // no-op for single-line
                 } else if (ch == 0x101) { // Down
-                    // no-op for single-line
                 } else if (ch == 0x102) { // Left
                     if (cursorPos > 0) cursorPos--;
                 } else if (ch == 0x103) { // Right
@@ -542,61 +492,22 @@ int main(int argc, char* argv[]) {
 
         source += lineBuffer + "\n";
 
-        nyble::Lexer lexer(source);
-        nyble::Program program;
-        std::vector<std::string> parseErrors;
-        std::unique_ptr<nyble::Program> progPtr;
+        std::string result;
+        const bool ok = engine.eval(source, result);
+        engine.drainEventLoop();
 
-        {
-            nyble::Parser p(lexer.tokenize());
-            program = p.parse();
-            if (!p.getErrors().empty()) parseErrors = p.getErrors();
-        }
-
-        // A complete expression like `69 > 67` with no trailing ';' fails to
-        // parse. Retry with one appended so the REPL echoes values without
-        // needing an ASI implementation in the parser itself.
-        if (!parseErrors.empty() && !looksIncomplete(source)) {
-            nyble::Parser r(nyble::Lexer(source + ";").tokenize());
-            auto rp = r.parse();
-            if (r.getErrors().empty()) {
-                progPtr = std::make_unique<nyble::Program>(std::move(rp));
-                parseErrors.clear();
-            }
-        }
-
-        if (!parseErrors.empty()) {
+        if (!ok) {
             if (looksIncomplete(source)) {
-                continue; // wait for more lines (multi-line input)
+                continue; // wait for more lines
             }
-            for (const auto& err : parseErrors) {
-                std::cerr << C_RED << err << C_RESET << "\n";
+            for (const auto& err : engine.errors()) {
+                std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << err << C_RESET << "\n";
             }
             source.clear();
             continue;
         }
 
-        nyble::Program& toCompile = progPtr ? *progPtr : program;
-
-        try {
-            nyble::BytecodeChunk chunk;
-            nyble::Compiler comp(&chunk);
-            comp.keepResult = true; // echo the value of the last expression in the REPL
-            comp.compile(toCompile);
-            try {
-                auto result = vm.run(&chunk, vm.globalEnv);
-                if (result.type != nyble::ValueType::Undefined && result.type != nyble::ValueType::Null) {
-                    std::cout << result.toString() << "\n";
-                }
-            } catch (const nyble::VMThrow& vt) {
-                std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << vt.value.toString() << C_RESET << "\n";
-            }
-        } catch (const nyble::NybleRuntimeError& e) {
-            std::cerr << C_RED << C_BOLD << "Uncaught " << C_RESET << C_RED << e.error.toString() << C_RESET << "\n";
-        } catch (const std::exception& e) {
-            std::cerr << C_RED << C_BOLD << "Internal Error: " << C_RESET << C_RED << e.what() << C_RESET << "\n";
-        }
-
+        if (!result.empty()) std::cout << result << "\n";
         source.clear();
     }
 

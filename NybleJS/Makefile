@@ -1,52 +1,57 @@
-CXX = g++
+# NybleJS + Ant Silver (libant) build
+# Requires a prebuilt libant embed dist (CI artifact: libant-mingw64).
+#   ANT_DIR=../tools/ant  (default) should contain lib/libant.a and include/
 
-# Toggle LTO at build time:
-#   make          -> LTO on (default, best runtime perf, slower link)
-#   make LTO=0    -> LTO off (faster link, no lto-wrapper warning)
-#   make nolto    -> same as LTO=0 (handy shorthand)
-LTO ?= 1
+CXX ?= clang++
+CC  ?= clang
+TARGET_TRIPLE ?= x86_64-w64-mingw32
+
+ANT_DIR ?= ../tools/ant
+ANT_LIB := $(ANT_DIR)/lib/libant.a
+ANT_INC := $(ANT_DIR)/include
+
+LTO ?= 0
 ifeq ($(LTO),1)
 LTO_FLAG = -flto
 else
 LTO_FLAG =
 endif
 
-CXXFLAGS = -std=c++17 -O3 $(LTO_FLAG) -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
-LDFLAGS = -O3 $(LTO_FLAG) -s
+WARN = -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
+CXXFLAGS = --target=$(TARGET_TRIPLE) -std=c++17 -O2 $(LTO_FLAG) $(WARN) -I$(ANT_INC) -I$(ANT_INC)/ant -Isrc
+CFLAGS   = --target=$(TARGET_TRIPLE) -std=gnu2x -O2 $(LTO_FLAG) $(WARN) -I$(ANT_INC) -I$(ANT_INC)/ant -Isrc -DNYBLE_ANT_PACKAGED
 
-SRCS = src/main.cpp src/gc.cpp src/value.cpp src/env.cpp src/lexer.cpp src/parser.cpp src/builtins.cpp src/interp.cpp src/bytecode.cpp src/compiler.cpp src/vm.cpp src/context.cpp
-OBJS = $(SRCS:src/%.cpp=%.o)
+# Windows/mingw-w64 system libs needed by static libant.a (Ant + tlsuv + mbedTLS).
+ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -luuid -lshell32 -ladvapi32 -lbcrypt -lwinmm -lpathcch -lnormaliz
+LDFLAGS = --target=$(TARGET_TRIPLE) -O2 $(LTO_FLAG) -s -static-libstdc++
+
+SRCS_CPP = src/main.cpp src/engine/ant_engine.cpp
+SRCS_C   = src/engine/ant_engine.c
+OBJS_CPP = $(SRCS_CPP:src/%.cpp=build/%.o)
+OBJS_C   = $(SRCS_C:src/%.c=build/%.o)
+OBJS     = $(OBJS_CPP) $(OBJS_C)
 
 all: njs
 
-njs: $(OBJS)
-	$(CXX) $(LDFLAGS) -o njs $(OBJS)
+njs: $(ANT_LIB) $(OBJS)
+	$(CXX) $(LDFLAGS) -o njs $(OBJS) $(ANT_LIB) $(ANT_SYS_LIBS)
 
-%.o: src/%.cpp
+build/%.o: src/%.cpp | build/engine
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-main.o: src/main.cpp src/nyblejs.h src/value.h src/lexer.h src/ast.h src/parser.h src/env.h src/interp.h src/builtins.h src/gc.h src/bytecode.h src/compiler.h src/vm.h src/cats.h
-gc.o: src/gc.cpp src/gc.h src/value.h
-value.o: src/value.cpp src/value.h src/gc.h src/env.h
-env.o: src/env.cpp src/env.h src/value.h src/gc.h
-lexer.o: src/lexer.cpp src/lexer.h
-parser.o: src/parser.cpp src/parser.h src/ast.h src/value.h
-builtins.o: src/builtins.cpp src/builtins.h src/env.h src/value.h src/gc.h
-interp.o: src/interp.cpp src/interp.h src/ast.h src/env.h src/builtins.h src/value.h src/gc.h
-bytecode.o: src/bytecode.cpp src/bytecode.h
-compiler.o: src/compiler.cpp src/compiler.h src/bytecode.h src/ast.h src/value.h
-vm.o: src/vm.cpp src/vm.h src/compiler.h src/env.h src/gc.h src/builtins.h src/interp.h src/bytecode.h src/ast.h src/value.h
-context.o: src/context.cpp src/context.h src/vm.h src/interp.h src/lexer.h src/parser.h src/compiler.h src/builtins.h src/env.h src/gc.h src/ast.h src/value.h
+build/%.o: src/%.c | build/engine
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/engine:
+	@mkdir -p build/engine
+
+$(ANT_LIB):
+	@echo "Missing $(ANT_LIB). Download the libant-mingw64 CI artifact into $(ANT_DIR)/"; exit 1
 
 clean:
-	del /Q njs.exe $(OBJS) 2>nul || rm -f njs $(OBJS)
+	rm -rf build njs njs.exe
 
 run: njs
 	./njs
 
-# Rebuild cleanly without LTO
-nolto:
-	$(MAKE) clean
-	$(MAKE) LTO=0 all
-
-.PHONY: all clean run nolto
+.PHONY: all clean run
