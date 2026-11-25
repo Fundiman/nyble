@@ -153,14 +153,14 @@ index d5eae69..f994a26 100644
  option('llvm_nm', type: 'string', value: 'llvm-nm', description: 'LLVM nm executable used to inspect Darwin LTO archives')
 +option('tls_backend', type: 'combo', choices: ['boringssl', 'openssl', 'mbedtls'], value: 'boringssl', description: 'TLS backend used by libant/tlsuv')
 diff --git a/src/cli/registry.c b/src/cli/registry.c
-index c0dad78..d990620 100644
+index c0dad78..a781faa 100644
 --- a/src/cli/registry.c
 +++ b/src/cli/registry.c
 @@ -1,3 +1,9 @@
 +#ifdef ANT_MBEDTLS_TLS_BACKEND
-+#include "ant.h"
-+#include <stddef.h>
-+/* registry CLI uses openssl for hashing; unavailable in mbedTLS embed build */
++#include <stdio.h>
++int pkg_cmd_login(int argc, char **argv) { (void)argc; (void)argv; fprintf(stderr, "registry unavailable in this build\n"); return 1; }
++int pkg_cmd_publish(int argc, char **argv) { (void)argc; (void)argv; fprintf(stderr, "registry unavailable in this build\n"); return 1; }
 +
 +#else /* ANT_MBEDTLS_TLS_BACKEND */
  #include <compat.h> // IWYU pragma: keep
@@ -207,13 +207,57 @@ index c422bfc..ee487f7 100644
 +
 +#endif /* ANT_MBEDTLS_TLS_BACKEND */
 diff --git a/src/modules/crypto.c b/src/modules/crypto.c
-index ed227ea..fe3cb3c 100644
+index ed227ea..a6b6a40 100644
 --- a/src/modules/crypto.c
 +++ b/src/modules/crypto.c
-@@ -1,3 +1,10 @@
+@@ -1,3 +1,54 @@
 +#ifdef ANT_MBEDTLS_TLS_BACKEND
 +#include "ant.h"
 +#include "modules/crypto.h"
++#include "gc.h"
++#include <string.h>
++#ifdef _WIN32
++#include <windows.h>
++#include <bcrypt.h>
++#ifndef BCRYPT_USE_SYSTEM_PREFERRED_RNG
++#define BCRYPT_USE_SYSTEM_PREFERRED_RNG 0x00000002
++#endif
++#else
++#include <fcntl.h>
++#include <unistd.h>
++#endif
++
++int crypto_fill_random(void *buf, size_t len) {
++  if (len == 0) return 0;
++  if (!buf) return -1;
++#ifdef _WIN32
++  return BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
++#else
++  int fd = open("/dev/urandom", O_RDONLY);
++  if (fd < 0) return -1;
++  size_t off = 0;
++  while (off < len) {
++    ssize_t n = read(fd, (unsigned char *)buf + off, len - off);
++    if (n <= 0) { close(fd); return -1; }
++    off += (size_t)n;
++  }
++  close(fd);
++  return 0;
++#endif
++}
++
++int crypto_random_uuid(char out[37]) {
++  static const char hex[] = "0123456789abcdef";
++  uint8_t u[16];
++  if (!out || crypto_fill_random(u, sizeof(u)) < 0) return -1;
++  u[6] = (uint8_t)((u[6] & 0x0f) | 0x40);
++  u[8] = (uint8_t)((u[8] & 0x3f) | 0x80);
++  for (int i = 0; i < 16; i++) { out[i*2] = hex[u[i] >> 4]; out[i*2+1] = hex[u[i] & 0x0f]; }
++  out[8]=out[13]=out[18]=out[23]='-'; out[36]='\0';
++  return 0;
++}
++
++void gc_mark_crypto(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
 +void init_crypto_module(ant_t *js) { (void)js; }
 +ant_value_t crypto_library(ant_t *js) { return Ant_Value_Undefined; }
 +
@@ -221,29 +265,30 @@ index ed227ea..fe3cb3c 100644
  #include <compat.h> // IWYU pragma: keep
  #include <uv.h>
  #include <string.h>
-@@ -2601,3 +2608,5 @@ ant_value_t crypto_library(ant_t *js) {
+@@ -2601,3 +2652,5 @@ ant_value_t crypto_library(ant_t *js) {
  
    return lib;
  }
 +
 +#endif /* ANT_MBEDTLS_TLS_BACKEND */
 diff --git a/src/modules/tls.c b/src/modules/tls.c
-index c517443..21e868d 100644
+index c517443..6ed2937 100644
 --- a/src/modules/tls.c
 +++ b/src/modules/tls.c
-@@ -1,3 +1,11 @@
+@@ -1,3 +1,12 @@
 +#ifdef ANT_MBEDTLS_TLS_BACKEND
 +#include "ant.h"
 +#include "modules/tls.h"
 +#include "gc.h"
 +ant_value_t tls_library(ant_t *js) { return Ant_Value_Undefined; }
 +void gc_mark_tls(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
++void cleanup_tls_module(ant_t *js) { (void)js; }
 +
 +#else /* ANT_MBEDTLS_TLS_BACKEND */
  #include <compat.h> // IWYU pragma: keep
  
  #include <stdbool.h>
-@@ -2176,3 +2184,5 @@ void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
+@@ -2176,3 +2185,5 @@ void gc_mark_tls(ant_t *js, gc_mark_fn mark) {
        if (vtype(write->callback) != kTypeUndefined) mark(js, write->callback);
    }
  }
