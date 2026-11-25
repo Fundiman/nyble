@@ -118,6 +118,34 @@ index b491f5d..d963e72 100644
    'deps_prefix_cmake=' + cmake_prefix,
    'warning_level=0',
    'optimization=s',
+diff --git a/meson/embed.py b/meson/embed.py
+index 73ab349..a1a5938 100644
+--- a/meson/embed.py
++++ b/meson/embed.py
+@@ -141,7 +141,7 @@ def namespaced(dirs, names, header):
+ def write_pc(path, version, defines, system_libs):
+   cflags = ' '.join(['-I${includedir}'] + [shlex.quote(d) for d in defines])
+   libs = ' '.join(['-L${libdir}', '-lant'] + [shlex.quote(a) for a in system_libs])
+-  with open(path, 'w') as f:
++  with open(path, 'w', encoding='utf-8') as f:
+     f.write(
+       'prefix=${pcfiledir}/../..\n'
+       'libdir=${prefix}/lib\n'
+@@ -192,12 +192,12 @@ def bundle(args):
+     content = namespaced(dirs, names, header)
+     dest = os.path.join(out, 'include', name)
+     os.makedirs(os.path.dirname(dest), exist_ok=True)
+-    with open(dest, 'w', errors='surrogateescape') as f:
++    with open(dest, 'w', encoding='utf-8', errors='surrogateescape') as f:
+       f.write(content)
+     text.append(content)
+ 
+   umbrella = names[os.path.join(source_root, 'include', 'ant.h')]
+-  with open(os.path.join(out, 'include', 'ant.h'), 'w') as f:
++  with open(os.path.join(out, 'include', 'ant.h'), 'w', encoding='utf-8') as f:
+     f.write(f'#include <{umbrella}>\n')
+ 
+   used = set(re.findall(r'\b\w+\b', '\n'.join(text)))
 diff --git a/meson/tests/meson.build b/meson/tests/meson.build
 index fbf4c73..990f358 100644
 --- a/meson/tests/meson.build
