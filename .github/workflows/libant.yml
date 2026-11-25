@@ -1,8 +1,8 @@
 name: libant
 
 # Builds a static libant.a (Ant Silver + stdlib + vendored deps) for
-# x86_64-w64-mingw32 using clang from MSYS2 CLANG64. No MSVC anywhere:
-# CLANG64 is clang with the mingw-w64/UCRT sysroot.
+# x86_64-w64-mingw32 using clang from MSYS2 UCRT64. No MSVC anywhere:
+# UCRT64 clang targets mingw-w64/UCRT with libstdc++ ABI.
 #
 # Artifact: libant-mingw64  ->  lib/libant.a, include/ant.h, include/ant/...,
 #                               lib/pkgconfig/libant.pc
@@ -34,20 +34,20 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Setup clang + mingw-w64 (CLANG64)
+      - name: Setup clang + mingw-w64 (UCRT64)
         uses: msys2/setup-msys2@v2
         with:
-          msystem: CLANG64
+          msystem: UCRT64
           update: false
           install: >-
-            mingw-w64-clang-x86_64-clang
-            mingw-w64-clang-x86_64-llvm-tools
-            mingw-w64-clang-x86_64-lld
-            mingw-w64-clang-x86_64-pkgconf
-            mingw-w64-clang-x86_64-meson
-            mingw-w64-clang-x86_64-ninja
-            mingw-w64-clang-x86_64-cmake
-            mingw-w64-clang-x86_64-nodejs
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-llvm-tools
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-nodejs
             make
             git
             jq
