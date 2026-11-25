@@ -1,0 +1,51 @@
+name: nyblejs-smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup clang + mingw-w64 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            make
+
+      - name: Download libant artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path tools/ant | Out-Null
+          gh run download 45643864761 --repo ${{ github.repository }} -n libant-mingw64 -D tools/ant
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build NybleJS
+        run: |
+          make -C NybleJS ANT_DIR=../tools/ant CC=clang CXX=clang++ -j4
+          ./NybleJS/njs -c "console.log(1+1)"
+          ./NybleJS/njs -c "console.log(typeof Nyble)"
+          ./NybleJS/njs --meow | head -1
+
+      - name: Upload njs
+        uses: actions/upload-artifact@v4
+        with:
+          name: nyblejs-njs-win64
+          path: |
+            NybleJS/njs.exe
+            NybleJS/njs
+          if-no-files-found: warn
