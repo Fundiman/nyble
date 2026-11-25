@@ -22,13 +22,13 @@ CXXFLAGS = --target=$(TARGET_TRIPLE) -std=c++17 -O2 $(LTO_FLAG) $(WARN) -I$(ANT_
 CFLAGS   = --target=$(TARGET_TRIPLE) -std=gnu2x -O2 $(LTO_FLAG) $(WARN) -I$(ANT_INC) -I$(ANT_INC)/ant -Isrc -DNYBLE_ANT_PACKAGED
 
 # Windows/mingw-w64 system libs needed by static libant.a (Ant + tlsuv + mbedTLS).
-ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -luuid -lshell32 -ladvapi32 -lbcrypt -lwinmm -lpathcch -lnormaliz
+ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -luuid -lshell32 -ladvapi32 -lbcrypt -lwinmm -lpathcch -lnormaliz -lwinpthread
 LDFLAGS = --target=$(TARGET_TRIPLE) -O2 $(LTO_FLAG) -s -static-libstdc++
 
 SRCS_CPP = src/main.cpp src/engine/ant_engine.cpp
 SRCS_C   = src/engine/ant_engine.c
 OBJS_CPP = $(SRCS_CPP:src/%.cpp=build/%.o)
-OBJS_C   = $(SRCS_C:src/%.c=build/%.o)
+OBJS_C   = $(SRCS_C:src/%.c=build/%.c.o)
 OBJS     = $(OBJS_CPP) $(OBJS_C)
 
 all: njs
@@ -39,7 +39,7 @@ njs: $(ANT_LIB) $(OBJS)
 build/%.o: src/%.cpp | build/engine
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-build/%.o: src/%.c | build/engine
+build/%.c.o: src/%.c | build/engine
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/engine:

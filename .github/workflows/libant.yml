@@ -48,6 +48,7 @@ jobs:
             mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-nodejs
+            make
             git
             jq
 
@@ -80,6 +81,13 @@ jobs:
           cd third_party/ant
           meson setup build-embed --prefer-static -Db_lto=false -Dc_std=gnu2x -Dtls_backend=mbedtls
           meson compile -C build-embed embed
+
+      - name: Build NybleJS smoke
+        run: |
+          make -C NybleJS ANT_DIR=../third_party/ant/build-embed/libant CC=clang CXX=clang++ -j4
+          ./NybleJS/njs -c "console.log(1+1)"
+          ./NybleJS/njs -c "console.log(typeof Nyble)"
+          ./NybleJS/njs --meow | head -1
 
       - name: Show artifact
         run: |

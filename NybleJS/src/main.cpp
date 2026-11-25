@@ -425,7 +425,7 @@ int main(int argc, char* argv[]) {
             rerender(prompt, lineBuffer, cursorPos);
 
             while (true) {
-                int ch = readChar();
+                int ch = readKey();
                 if (ch == -1) { disableRawMode(); return 0; }
                 if (ch == 3) { // Ctrl+C
                     std::cout << "\n" << prompt << std::flush;

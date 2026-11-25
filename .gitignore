@@ -26,3 +26,7 @@ Thumbs.db
 
 # Ignored marker files
 *.ignore
+
+# Local libant artifact (downloaded from CI)
+/tools/ant/
+
