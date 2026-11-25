@@ -23,7 +23,7 @@ CFLAGS   = --target=$(TARGET_TRIPLE) -std=gnu2x -O2 $(LTO_FLAG) $(WARN) -I$(ANT_
 
 # Windows/mingw-w64 system libs needed by static libant.a (Ant + tlsuv + mbedTLS).
 ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -loleaut32 -luuid -ltaskschd -lshell32 -ladvapi32 -lbcrypt -lwinmm -lpathcch -lnormaliz -lwinpthread
-LDFLAGS = --target=$(TARGET_TRIPLE) -O2 $(LTO_FLAG) -s -static-libstdc++
+LDFLAGS = --target=$(TARGET_TRIPLE) -O2 $(LTO_FLAG) -fuse-ld=lld -s -static-libstdc++
 
 SRCS_CPP = src/main.cpp src/engine/ant_engine.cpp
 SRCS_C   = src/engine/ant_engine.c
