@@ -1,8 +1,8 @@
 diff --git a/meson/deps/meson.build b/meson/deps/meson.build
-index b491f5d..6d42f08 100644
+index b491f5d..885dbeb 100644
 --- a/meson/deps/meson.build
 +++ b/meson/deps/meson.build
-@@ -1,47 +1,68 @@
+@@ -1,47 +1,72 @@
  cc = meson.get_compiler('c')
  cmake = import('cmake')
  
@@ -97,6 +97,10 @@ index b491f5d..6d42f08 100644
 +  mbed_sub = cmake.subproject('mbedtls', options: mbed_opts)
 +  ssl_dep = mbed_sub.dependency('mbedtls')
 +  crypto_dep = mbed_sub.dependency('mbedcrypto')
++  x509_dep = mbed_sub.dependency('mbedx509')
++  meson.override_dependency('mbedtls', ssl_dep)
++  meson.override_dependency('mbedx509', x509_dep)
++  meson.override_dependency('mbedcrypto', crypto_dep)
 +else
 +  ssl_dep = dependency('ssl', required: true)
 +  crypto_dep = dependency('crypto', required: true)
@@ -104,7 +108,7 @@ index b491f5d..6d42f08 100644
  
  if host_machine.system() == 'windows'
    secur32_dep = cc.find_library('secur32', required: true)
-@@ -92,7 +113,7 @@ brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
+@@ -92,7 +117,7 @@ brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
  cmake_prefix = get_option('deps_prefix_cmake')
  
  tlsuv_sub = subproject('tlsuv', default_options: [
