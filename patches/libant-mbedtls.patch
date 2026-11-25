@@ -1,0 +1,227 @@
+diff --git a/meson/deps/meson.build b/meson/deps/meson.build
+index b491f5d..6d42f08 100644
+--- a/meson/deps/meson.build
++++ b/meson/deps/meson.build
+@@ -1,47 +1,68 @@
+ cc = meson.get_compiler('c')
+ cmake = import('cmake')
+ 
+-boringssl_opts = cmake.subproject_options()
+-boringssl_opts.add_cmake_defines({
+-  'BUILD_SHARED_LIBS': 'OFF',
+-  'BUILD_TESTING': 'OFF',
+-  'INSTALL_ENABLED': '0',
+-})
+-
+-if host_machine.system() == 'darwin'
+-  deployment_flag = '-mmacosx-version-min=15.0'
++tls_backend = get_option('tls_backend')
++
++if tls_backend == 'boringssl'
++  boringssl_opts = cmake.subproject_options()
+   boringssl_opts.add_cmake_defines({
+-    'CMAKE_EXE_LINKER_FLAGS': deployment_flag,
+-    'CMAKE_SHARED_LINKER_FLAGS': deployment_flag,
+-    'CMAKE_MODULE_LINKER_FLAGS': deployment_flag,
++    'BUILD_SHARED_LIBS': 'OFF',
++    'BUILD_TESTING': 'OFF',
++    'INSTALL_ENABLED': '0',
+   })
+-endif
+-
+-boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
+-boringssl_opts.append_compile_args('c', boringssl_warning_flag)
+-boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
+ 
+-boringssl_opts.append_compile_args('c', '-g0')
+-boringssl_opts.append_compile_args('cpp', '-g0')
++  if host_machine.system() == 'darwin'
++    deployment_flag = '-mmacosx-version-min=15.0'
++    boringssl_opts.add_cmake_defines({
++      'CMAKE_EXE_LINKER_FLAGS': deployment_flag,
++      'CMAKE_SHARED_LINKER_FLAGS': deployment_flag,
++      'CMAKE_MODULE_LINKER_FLAGS': deployment_flag,
++    })
++  endif
+ 
+-# drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
+-# P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
+-boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
+-boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
++  boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
++  boringssl_opts.append_compile_args('c', boringssl_warning_flag)
++  boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
+ 
+-if host_machine.system() == 'windows'
+-  boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
+-  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
+-endif
++  boringssl_opts.append_compile_args('c', '-g0')
++  boringssl_opts.append_compile_args('cpp', '-g0')
+ 
+-boringssl_opts.set_override_option('warning_level', '0')
+-boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
++  # drop precomputed EC tables (P-256, Ed25519 base point); saves ~225 KB.
++  # P-256 ops get ~2x slower but only run during TLS handshakes (~90us/connect).
++  boringssl_opts.append_compile_args('c', '-DOPENSSL_SMALL')
++  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_SMALL')
+ 
+-ssl_dep = boringssl_sub.dependency('ssl')
+-crypto_dep = boringssl_sub.dependency('crypto')
++  if host_machine.system() == 'windows'
++    boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
++    boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
++  endif
+ 
+-meson.override_dependency('ssl', ssl_dep)
+-meson.override_dependency('crypto', crypto_dep)
++  boringssl_opts.set_override_option('warning_level', '0')
++  boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
++
++  ssl_dep = boringssl_sub.dependency('ssl')
++  crypto_dep = boringssl_sub.dependency('crypto')
++
++  meson.override_dependency('ssl', ssl_dep)
++  meson.override_dependency('crypto', crypto_dep)
++elif tls_backend == 'mbedtls'
++  # Portable TLS: no NASM, no BoringSSL. tlsuv has a native mbedTLS engine;
++  # we only need to supply the three mbedTLS static libs.
++  mbed_opts = cmake.subproject_options()
++  mbed_opts.add_cmake_defines({
++    'ENABLE_PROGRAMS': 'OFF',
++    'ENABLE_TESTING': 'OFF',
++    'USE_STATIC_MBEDTLS_LIBRARY': 'ON',
++    'USE_SHARED_MBEDTLS_LIBRARY': 'OFF',
++    'INSTALL_MBEDTLS_HEADERS': 'OFF',
++  })
++  mbed_sub = cmake.subproject('mbedtls', options: mbed_opts)
++  ssl_dep = mbed_sub.dependency('mbedtls')
++  crypto_dep = mbed_sub.dependency('mbedcrypto')
++else
++  ssl_dep = dependency('ssl', required: true)
++  crypto_dep = dependency('crypto', required: true)
++endif
+ 
+ if host_machine.system() == 'windows'
+   secur32_dep = cc.find_library('secur32', required: true)
+@@ -92,7 +113,7 @@ brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
+ cmake_prefix = get_option('deps_prefix_cmake')
+ 
+ tlsuv_sub = subproject('tlsuv', default_options: [
+-  'tls_backend=boringssl',
++  'tls_backend=' + tls_backend,
+   'deps_prefix_cmake=' + cmake_prefix,
+   'warning_level=0',
+   'optimization=s',
+diff --git a/meson/tests/meson.build b/meson/tests/meson.build
+index fbf4c73..990f358 100644
+--- a/meson/tests/meson.build
++++ b/meson/tests/meson.build
+@@ -225,12 +225,14 @@ http_protocols_test = executable(
+ )
+ test('http-protocols', http_protocols_test)
+ 
+-executable(
+-  'tlsuv-boringssl-smoke',
+-  files(tests_root / 'tlsuv_boringssl_smoke.c'),
+-  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
+-  build_by_default: false
+-)
++if get_option('tls_backend') == 'boringssl'
++  executable(
++    'tlsuv-boringssl-smoke',
++    files(tests_root / 'tlsuv_boringssl_smoke.c'),
++    dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep],
++    build_by_default: false
++  )
++endif
+ 
+ executable(
+   'test-websocket-connect-cancel',
+diff --git a/meson_options.txt b/meson_options.txt
+index d5eae69..f994a26 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -15,3 +15,4 @@ option('build_timestamp', type: 'string', value: '', description: 'build timesta
+ option('build_git_hash', type: 'string', value: '', description: 'git hash for version metadata (defaults to git rev-parse if empty)')
+ option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
+ option('llvm_nm', type: 'string', value: 'llvm-nm', description: 'LLVM nm executable used to inspect Darwin LTO archives')
++option('tls_backend', type: 'combo', choices: ['boringssl', 'openssl', 'mbedtls'], value: 'boringssl', description: 'TLS backend used by libant/tlsuv')
+diff --git a/vendor/mbedtls.wrap b/vendor/mbedtls.wrap
+new file mode 100644
+index 0000000..3b1763d
+--- /dev/null
++++ b/vendor/mbedtls.wrap
+@@ -0,0 +1,8 @@
++[wrap-file]
++directory = mbedtls-3.6.3
++source_url = https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.6.3.tar.gz
++source_filename = mbedtls-v3.6.3.tar.gz
++source_hash = e69c4c13377e89b9d696006ef9c8258e3be75b6dbd464cfd573360482b1a1f4e
++
++[provide]
++dependency_names = mbedtls, mbedx509, mbedcrypto
+diff --git a/vendor/packagefiles/tlsuv/meson.build b/vendor/packagefiles/tlsuv/meson.build
+index 37b6884..4b07286 100644
+--- a/vendor/packagefiles/tlsuv/meson.build
++++ b/vendor/packagefiles/tlsuv/meson.build
+@@ -44,6 +44,8 @@ tlsuv_sources = files(
+ 
+ if tls_backend == 'boringssl'
+   tlsuv_sources += files('src/boringssl/engine.c', 'src/boringssl/keychain.c', 'src/boringssl/keys.c')
++elif tls_backend == 'mbedtls'
++  tlsuv_sources += files('src/mbedtls/engine.c', 'src/mbedtls/keys.c')
+ else
+   tlsuv_sources += files('src/openssl/engine.c', 'src/openssl/keys.c')
+ endif
+@@ -69,12 +71,22 @@ elif host_machine.system() == 'linux'
+   tlsuv_c_args += ['-D_POSIX_C_SOURCE=200112', '-D_GNU_SOURCE']
+ endif
+ 
+-tls_ssl_dep = dependency('ssl', required: true)
+-tls_crypto_dep = dependency('crypto', required: true)
++tls_extra_dep = []
++if tls_backend == 'mbedtls'
++  tls_ssl_dep = dependency('mbedtls', required: true)
++  tls_crypto_dep = dependency('mbedx509', required: true)
++  tls_extra_dep = [dependency('mbedcrypto', required: true)]
++else
++  tls_ssl_dep = dependency('ssl', required: true)
++  tls_crypto_dep = dependency('crypto', required: true)
++endif
+ 
+ win_deps = []
+ if host_machine.system() == 'windows'
+   win_deps = [cc.find_library('crypt32')]
++  if tls_backend == 'mbedtls'
++    win_deps += [cc.find_library('bcrypt')]
++  endif
+ endif
+ 
+ config_data = configuration_data()
+@@ -91,7 +103,7 @@ tlsuv_lib = static_library(
+   'tlsuv',
+   tlsuv_sources, tlsuv_config_h,
+   c_args: tlsuv_c_args,
+-  dependencies: [libuv_dep, llhttp_dep, zlib_dep, tls_ssl_dep, tls_crypto_dep] + win_deps,
++  dependencies: [libuv_dep, llhttp_dep, zlib_dep, tls_ssl_dep, tls_crypto_dep] + tls_extra_dep + win_deps,
+   include_directories: [
+     include_directories('include'),
+     include_directories('src'),
+@@ -103,7 +115,7 @@ tlsuv_lib = static_library(
+ 
+ tlsuv_dep = declare_dependency(
+   link_with: tlsuv_lib,
+-  dependencies: [tls_ssl_dep, tls_crypto_dep],
++  dependencies: [tls_ssl_dep, tls_crypto_dep] + tls_extra_dep,
+   include_directories: [
+     include_directories('include'),
+     include_directories('deps/uv_link_t/include'),
+diff --git a/vendor/packagefiles/tlsuv/meson_options.txt b/vendor/packagefiles/tlsuv/meson_options.txt
+index 9a895e1..ef6b93a 100644
+--- a/vendor/packagefiles/tlsuv/meson_options.txt
++++ b/vendor/packagefiles/tlsuv/meson_options.txt
+@@ -1,2 +1,2 @@
+-option('tls_backend', type: 'combo', choices: ['openssl', 'boringssl'], value: 'boringssl', description: 'TLS backend library')
++option('tls_backend', type: 'combo', choices: ['openssl', 'boringssl', 'mbedtls'], value: 'boringssl', description: 'TLS backend library')
+ option('deps_prefix_cmake', type: 'string', value: '', description: 'Prefix for cmake-built dependencies')
