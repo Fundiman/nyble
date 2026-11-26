@@ -65,6 +65,21 @@ nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
     }
     ant_bootstrap_modules(e->js);
 
+    /* Always expose Nyble.props for CLI -D compat. */
+    {
+        ant_value_t global = js_glob(e->js);
+        ant_value_t nyble = js_get(e->js, global, "Nyble");
+        if (vtype(nyble) != kTypeObject) {
+            nyble = Ant_Object_Create(e->js);
+            js_setprop(e->js, global, js_mkstr(e->js, "Nyble", 5), nyble);
+        }
+        ant_value_t props = js_get(e->js, nyble, "props");
+        if (vtype(props) != kTypeObject) {
+            props = Ant_Object_Create(e->js);
+            js_setprop(e->js, nyble, js_mkstr(e->js, "props", 5), props);
+        }
+    }
+
     return e;
 }
 
@@ -75,13 +90,13 @@ void nyble_engine_set_prop(nyble_engine *e, const char *key, const char *value) 
     ant_value_t nyble = js_get(e->js, global, "Nyble");
     if (vtype(nyble) != kTypeObject) {
         nyble = Ant_Object_Create(e->js);
-        js_set(e->js, global, "Nyble", nyble);
+        js_setprop(e->js, global, js_mkstr(e->js, "Nyble", 5), nyble);
     }
 
     ant_value_t props = js_get(e->js, nyble, "props");
     if (vtype(props) != kTypeObject) {
         props = Ant_Object_Create(e->js);
-        js_set(e->js, nyble, "props", props);
+        js_setprop(e->js, nyble, js_mkstr(e->js, "props", 5), props);
     }
 
     js_set(e->js, props, key, js_mkstr(e->js, value, strlen(value)));

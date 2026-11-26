@@ -62,10 +62,9 @@ static void printHelp() {
               << "  " << C_YELLOW << "-help, --help" << C_RESET << "          Show this help message\n"
               << "  " << C_YELLOW << "-version, --version" << C_RESET << "    Show version info\n"
               << "  " << C_YELLOW << "-Xmx<size>" << C_RESET << "             Set GC max memory budget " << C_DIM << "(e.g. 256m, 1g)" << C_RESET << "\n"
-              << "  " << C_YELLOW << "-engine, --engine <type>" << C_RESET << "  Force execution engine:\n"
-              << "                            " << C_GREEN << "tree" << C_RESET << "    - Tree-walking interpreter only\n"
-              << "                            " << C_GREEN << "vm" << C_RESET << "      - Bytecode VM only\n"
-              << "                            " << C_GREEN << "jit" << C_RESET << "      - JIT compiler " << C_DIM << "(not yet implemented)" << C_RESET << "\n"
+              << "  " << C_YELLOW << "-engine, --engine <type>" << C_RESET << "  Execution engine:\n"
+              << "                            " << C_GREEN << "ant" << C_RESET << "     - Ant Silver (default)\n"
+              << "                            " << C_GREEN << "tree/vm/jit" << C_RESET << " - Compat aliases\n"
               << "  " << C_YELLOW << "-c <code>" << C_RESET << "              Execute inline JavaScript code\n"
               << "  " << C_YELLOW << "-D<key>=<value>" << C_RESET << "        Set a custom property " << C_DIM << "(accessible via Nyble.props)" << C_RESET << "\n"
               << "\n"
@@ -133,15 +132,17 @@ static CliOptions parseArgs(int argc, char* argv[]) {
             i++;
         } else if (arg == "-engine" || arg == "--engine") {
             if (i + 1 >= argc) {
-            std::cerr << C_RED << C_BOLD << "Error: " << C_RESET << C_RED << arg << " requires a value (tree, vm, jit)" << C_RESET << "\n";
+            std::cerr << C_RED << C_BOLD << "Error: " << C_RESET << C_RED << arg << " requires a value (ant, tree, vm, jit)" << C_RESET << "\n";
                 exit(1);
             }
             std::string val = argv[i + 1];
-            if (val == "tree") opts.engine = EngineMode::TreeWalk;
-            else if (val == "vm") opts.engine = EngineMode::BytecodeVM;
-            else if (val == "jit") opts.engine = EngineMode::JIT;
-            else {
-                std::cerr << C_RED << C_BOLD << "Error: " << C_RESET << C_RED << "Unknown engine '" << val << "'. Use tree, vm, or jit." << C_RESET << "\n";
+            if (val == "ant" || val == "tree" || val == "vm" || val == "jit") {
+                if (val == "tree") opts.engine = EngineMode::TreeWalk;
+                else if (val == "vm") opts.engine = EngineMode::BytecodeVM;
+                else if (val == "jit") opts.engine = EngineMode::JIT;
+                else opts.engine = EngineMode::Auto; // ant = default Ant Silver
+            } else {
+                std::cerr << C_RED << C_BOLD << "Error: " << C_RESET << C_RED << "Unknown engine '" << val << "'. Use ant, tree, vm, or jit." << C_RESET << "\n";
                 exit(1);
             }
             i += 2;
