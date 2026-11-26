@@ -12,7 +12,7 @@ Most browsers need literal super computers to compile; Nyble does not.
   <summary><b>1. Why do I only see a JavaScript engine?</b></summary>
   <br>
     
-   We don't want to work on EVERYTHING at once—we'll complete ONE component and then move on to the next.
+   We don't want to work on EVERYTHING at once—we'll complete ONE component and then move on to the next. 
 </details>
 
 <details>
@@ -26,7 +26,18 @@ Most browsers need literal super computers to compile; Nyble does not.
   <summary><b>3. When will this be ready for like, normal daily usage?</b></summary>
   <br>
 
-  Probably in a few months if not years.
+  Probably in a few months if not years. [AntJS](https://github.com/themackabu/ant) has helped us speed up progress significantly — there's still plenty of time left, but not an eternity unlike before.
+</details>
+
+<details>
+  <summary><b>4. WHY IS THE REPOSITORY USING ZIG THAT'S BLOAT JUST LIKE RUST I CAN'T GET THAT ON MY PHONE!!</b></summary>
+  <br>
+
+  You should be grateful that I didn't use Rust for this project because I despise it (it's compile-time bloat). 
+  
+  In all seriousness, I really didn't want to use another compiler other than gcc/g++ (MinGW-w64) but I had to because of AntJS compatibility and stuff — if you can't get Zig on you device, you could:
+  - either write patches to make it work with whatever compiler you have;
+  - OR use GitHub Actions (fork the repository, push your changes, and run the workflow).
 </details>
 
 # Licensing
