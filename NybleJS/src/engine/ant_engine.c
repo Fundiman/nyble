@@ -57,7 +57,7 @@ static char *nyble_js_quote(const char *s) {
     return out;
 }
 
-nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
+nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes, int node_compat) {
     nyble_engine *e = (nyble_engine *)calloc(1, sizeof(*e));
     if (!e) return NULL;
 
@@ -68,8 +68,9 @@ nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
     ant_isolate_options_t options;
     memset(&options, 0, sizeof(options));
     options.object_arena_bytes = heap_bytes;
+    options.node_compat = node_compat ? true : false;
 
-    e->js = Ant_Create(heap_bytes ? &options : NULL);
+    e->js = Ant_Create(&options);
     if (!e->js) {
         free(e);
         return NULL;
@@ -87,7 +88,7 @@ nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
     /* Always expose Nyble.props for CLI -D compat. */
     {
         static const char init[] = "globalThis.Nyble=globalThis.Nyble||{props:{}};";
-        js_eval_bytecode_eval(e->js, init, sizeof(init) - 1);
+        js_eval_bytecode_eval(e->js, init, sizeof(init) - 1, false);
     }
 
     return e;
@@ -112,7 +113,7 @@ void nyble_engine_set_prop(nyble_engine *e, const char *key, const char *value) 
         memcpy(buf + sizeof(prefix) - 1 + klen + sizeof(mid) - 1, v, vlen);
         memcpy(buf + total - 1, suffix, 1);
         buf[total] = 0;
-        js_eval_bytecode_eval(e->js, buf, total);
+        js_eval_bytecode_eval(e->js, buf, total, false);
         free(buf);
     }
     free(k);

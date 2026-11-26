@@ -12,7 +12,7 @@ extern "C" {
 
 typedef struct nyble_engine nyble_engine;
 
-nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes);
+nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes, int node_compat);
 void nyble_engine_destroy(nyble_engine *e);
 
 /* Define a CLI -D property as Nyble.props.<key> = <value>. */

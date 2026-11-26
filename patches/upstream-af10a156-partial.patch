@@ -1,0 +1,71 @@
+Partial backport from upstream Ant commit af10a156e7ba63dfbf8d451d097c532beb0454fa
+"add openssl option to meson" (theMackabu, 2026-11-25)
+Source: https://github.com/themackabu/ant/commit/af10a156e7ba63dfbf8d451d097c532beb0454fa
+Only non-conflicting/low-risk hunks picked; see issue #473.
+
+diff --git a/meson/embed.py b/meson/embed.py
+index 73ab3499b..ed362ba2b 100644
+--- a/meson/embed.py
++++ b/meson/embed.py
+@@ -29,7 +29,7 @@ def link_inputs(build_root, target):
+   for arg in params:
+     if arg == '-framework':
+       system += [arg, next(params)]
+-    elif arg.startswith('-l') or arg in ('-pthread', '-no-pie'):
++    elif arg.startswith(('-l', '-L')) or arg in ('-pthread', '-no-pie'):
+       system.append(arg)
+     elif arg.endswith(ARCHIVE_SUFFIXES):
+       path = os.path.realpath(os.path.join(build_root, arg))
+
+diff --git a/src/modules/process.c b/src/modules/process.c
+index 2539f5111..5d0b45f9a 100644
+--- a/src/modules/process.c
++++ b/src/modules/process.c
+@@ -8,6 +8,7 @@
+ #include <time.h>
+ #include <uthash.h>
+ #include <uv.h>
++#include <openssl/crypto.h>
+ 
+ #ifdef _WIN32
+ #define WIN32_LEAN_AND_MEAN
+@@ -2453,7 +2454,11 @@ void init_process_module(ant_t *js) {
+ 
+   ant_value_t features_obj = Ant_Object_Create(js);
+   js_set(js, features_obj, "uv", Ant_Value_True);
++#ifdef OPENSSL_IS_BORINGSSL
+   process_set_string(js, features_obj, "tls", "BoringSSL");
++#else
++  process_set_string(js, features_obj, "tls", "OpenSSL");
++#endif
+   process_set_string(js, features_obj, "typescript", "transform");
+   js_set(js, process_obj, "features", features_obj);
+   process_set_string(js, process_obj, "version", "v26.13.0");
+@@ -2470,7 +2475,11 @@ void init_process_module(ant_t *js) {
+   process_set_string(js, versions_obj, "utf8proc", ANT_DEP_UTF8PROC_VERSION);
+   process_set_string(js, versions_obj, "zlib", ANT_DEP_ZLIB_VERSION);
+   process_set_string(js, versions_obj, "wamr", ANT_DEP_WAMR_VERSION);
++#ifdef OPENSSL_IS_BORINGSSL
+   process_set_string(js, versions_obj, "boringssl", ANT_DEP_BORINGSSL_VERSION);
++#else
++  process_set_string(js, versions_obj, "openssl", OpenSSL_version(OPENSSL_VERSION_STRING));
++#endif
+   process_set_string(js, versions_obj, "yyjson", ANT_DEP_YYJSON_VERSION);
+   process_set_string(js, versions_obj, "unicode", ANT_DEP_UNICODE_VERSION);
+ 
+
+diff --git a/src/types/process.d.ts b/src/types/process.d.ts
+index ac677ca72..d31101f4b 100644
+--- a/src/types/process.d.ts
++++ b/src/types/process.d.ts
+@@ -28,7 +28,8 @@ interface Versions {
+   modules: string;
+   napi: string;
+   wamr: string;
+-  boringssl: string;
++  boringssl?: string;
++  openssl?: string;
+ }
+ 
+ interface Release {
+

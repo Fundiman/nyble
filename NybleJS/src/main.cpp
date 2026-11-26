@@ -67,6 +67,8 @@ static void printHelp() {
               << "                            " << C_GREEN << "tree/vm/jit" << C_RESET << " - Compat aliases\n"
               << "  " << C_YELLOW << "-c <code>" << C_RESET << "              Execute inline JavaScript code\n"
               << "  " << C_YELLOW << "-D<key>=<value>" << C_RESET << "        Set a custom property " << C_DIM << "(accessible via Nyble.props)" << C_RESET << "\n"
+              << "  " << C_YELLOW << "--node-compat" << C_RESET << "          Enable Node.js compat " << C_DIM << "(default)" << C_RESET << "\n"
+              << "  " << C_YELLOW << "--no-node-compat" << C_RESET << "       Disable Node.js compat (browser-like)" << C_RESET << "\n"
               << "\n"
               << C_CYAN << C_BOLD << "Examples:" << C_RESET << "\n"
               << "  " << C_WHITE << "njs" << C_RESET << " script.js\n"
@@ -90,6 +92,7 @@ struct CliOptions {
     bool showHelp = false;
     bool showVersion = false;
     bool showMeow = false;
+    bool nodeCompat = true;
     std::string filename;
     std::string code;
     std::map<std::string, std::string> props;
@@ -110,6 +113,12 @@ static CliOptions parseArgs(int argc, char* argv[]) {
             i++;
         } else if (arg == "-meow" || arg == "--meow") {
             opts.showMeow = true;
+            i++;
+        } else if (arg == "--node-compat") {
+            opts.nodeCompat = true;
+            i++;
+        } else if (arg == "--no-node-compat") {
+            opts.nodeCompat = false;
             i++;
         } else if (arg.substr(0, 4) == "-Xmx") {
             std::string sizeStr = arg.substr(4);
@@ -333,7 +342,7 @@ int main(int argc, char* argv[]) {
         }
 
         try {
-            nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0);
+            nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0, opts.nodeCompat);
             for (const auto& kv : opts.props) engine.setProp(kv.first, kv.second);
 
             std::string result;
@@ -354,7 +363,7 @@ int main(int argc, char* argv[]) {
     }
 
     // REPL - interactive (TTY) and piped (non-TTY) modes
-    nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0);
+    nyble::Engine engine(argc, argv, opts.memSet ? opts.memBytes : 0, opts.nodeCompat);
     for (const auto& kv : opts.props) engine.setProp(kv.first, kv.second);
 
     bool piped = !stdinIsTTY();
@@ -495,8 +504,19 @@ int main(int argc, char* argv[]) {
         source += lineBuffer + "\n";
 
         std::string result;
-        const bool ok = engine.eval(source, result);
-        engine.drainEventLoop();
+        bool ok = false;
+        try {
+            ok = engine.eval(source, result);
+            engine.drainEventLoop();
+        } catch (const std::exception& e) {
+            std::cerr << C_RED << C_BOLD << "Internal Error: " << C_RESET << C_RED << e.what() << C_RESET << "\n";
+            source.clear();
+            continue;
+        } catch (...) {
+            std::cerr << C_RED << C_BOLD << "Internal Error: " << C_RESET << C_RED << "unknown exception" << C_RESET << "\n";
+            source.clear();
+            continue;
+        }
 
         if (!ok) {
             if (looksIncomplete(source)) {

@@ -10,7 +10,7 @@ namespace nyble {
 // One Engine == one Ant isolate == one JS global scope.
 class Engine {
 public:
-    Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0);
+    Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0, bool nodeCompat = true);
     ~Engine();
 
     Engine(const Engine&) = delete;

@@ -11,8 +11,8 @@ struct Engine::Impl {
     nyble_engine *engine = nullptr;
 };
 
-Engine::Engine(int argc, char **argv, size_t heapBytes) : impl_(new Impl()) {
-    impl_->engine = nyble_engine_create(argc, argv, heapBytes);
+Engine::Engine(int argc, char **argv, size_t heapBytes, bool nodeCompat) : impl_(new Impl()) {
+    impl_->engine = nyble_engine_create(argc, argv, heapBytes, nodeCompat ? 1 : 0);
     if (!impl_->engine) {
         delete impl_;
         impl_ = nullptr;
