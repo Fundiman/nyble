@@ -38,6 +38,25 @@ static char *nyble_strdup(const char *s) {
     return p;
 }
 
+static char *nyble_js_quote(const char *s) {
+    size_t n = 0;
+    for (const char *p = s; *p; p++) n += (*p == '\\' || *p == '"' || *p == '\n' || *p == '\r' || *p == '\t') ? 2 : 1;
+    char *out = (char *)malloc(n + 3);
+    if (!out) return NULL;
+    char *w = out;
+    *w++ = '"';
+    for (const char *p = s; *p; p++) {
+        if (*p == '\\' || *p == '"') { *w++ = '\\'; *w++ = *p; }
+        else if (*p == '\n') { *w++ = '\\'; *w++ = 'n'; }
+        else if (*p == '\r') { *w++ = '\\'; *w++ = 'r'; }
+        else if (*p == '\t') { *w++ = '\\'; *w++ = 't'; }
+        else *w++ = *p;
+    }
+    *w++ = '"';
+    *w = 0;
+    return out;
+}
+
 nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
     nyble_engine *e = (nyble_engine *)calloc(1, sizeof(*e));
     if (!e) return NULL;
@@ -67,17 +86,8 @@ nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
 
     /* Always expose Nyble.props for CLI -D compat. */
     {
-        ant_value_t global = js_glob(e->js);
-        ant_value_t nyble = js_get(e->js, global, "Nyble");
-        if (vtype(nyble) != kTypeObject) {
-            nyble = Ant_Object_Create(e->js);
-            js_setprop(e->js, global, js_mkstr(e->js, "Nyble", 5), nyble);
-        }
-        ant_value_t props = js_get(e->js, nyble, "props");
-        if (vtype(props) != kTypeObject) {
-            props = Ant_Object_Create(e->js);
-            js_setprop(e->js, nyble, js_mkstr(e->js, "props", 5), props);
-        }
+        static const char init[] = "globalThis.Nyble=globalThis.Nyble||{props:{}};";
+        js_eval_bytecode_eval(e->js, init, sizeof(init) - 1);
     }
 
     return e;
@@ -85,21 +95,28 @@ nyble_engine *nyble_engine_create(int argc, char **argv, size_t heap_bytes) {
 
 void nyble_engine_set_prop(nyble_engine *e, const char *key, const char *value) {
     if (!e || !e->js || !key || !value) return;
-
-    ant_value_t global = js_glob(e->js);
-    ant_value_t nyble = js_get(e->js, global, "Nyble");
-    if (vtype(nyble) != kTypeObject) {
-        nyble = Ant_Object_Create(e->js);
-        js_setprop(e->js, global, js_mkstr(e->js, "Nyble", 5), nyble);
+    char *k = nyble_js_quote(key);
+    char *v = nyble_js_quote(value);
+    if (!k || !v) { free(k); free(v); return; }
+    /* globalThis.Nyble.props[<k>]=<v>; */
+    size_t klen = strlen(k), vlen = strlen(v);
+    const char prefix[] = "globalThis.Nyble=globalThis.Nyble||{props:{}};globalThis.Nyble.props[";
+    const char mid[] = "]=";
+    const char suffix[] = ";";
+    size_t total = sizeof(prefix) - 1 + klen + sizeof(mid) - 1 + vlen + sizeof(suffix) - 1;
+    char *buf = (char *)malloc(total + 1);
+    if (buf) {
+        memcpy(buf, prefix, sizeof(prefix) - 1);
+        memcpy(buf + sizeof(prefix) - 1, k, klen);
+        memcpy(buf + sizeof(prefix) - 1 + klen, mid, sizeof(mid) - 1);
+        memcpy(buf + sizeof(prefix) - 1 + klen + sizeof(mid) - 1, v, vlen);
+        memcpy(buf + total - 1, suffix, 1);
+        buf[total] = 0;
+        js_eval_bytecode_eval(e->js, buf, total);
+        free(buf);
     }
-
-    ant_value_t props = js_get(e->js, nyble, "props");
-    if (vtype(props) != kTypeObject) {
-        props = Ant_Object_Create(e->js);
-        js_setprop(e->js, nyble, js_mkstr(e->js, "props", 5), props);
-    }
-
-    js_set(e->js, props, key, js_mkstr(e->js, value, strlen(value)));
+    free(k);
+    free(v);
 }
 
 void nyble_engine_destroy(nyble_engine *e) {
