@@ -105,7 +105,7 @@ static void HostModules(void) {
   assert(host_inits == 1);
 
   assert(is_err(js_esm_import_sync_cstr(other, "ant:host-test", 13)));
-  assert(!js_esm_is_node_builtin("ant:host-test", 13));
+  assert(!js_esm_is_node_builtin(js, "ant:host-test", 13));
 
   Ant_Destroy(other);
   Ant_Destroy(js);

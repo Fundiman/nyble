@@ -82,8 +82,9 @@ header = os.path.join(env["CARGO_TARGET_DIR"], args.target, "ant_sandbox_devices
 if args.header_out:
   env["ANT_SANDBOX_HEADER"] = header
 
-if provided_cargo:
-  build += ["--offline"]
+# allow system cargo to fetch if needed; ant cache may be warm
+# if provided_cargo:
+#   build += ["--offline"]
 if args.features:
   build += ["--features", args.features]
 subprocess.run(build, cwd=args.crate, env=env, check=True)

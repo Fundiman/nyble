@@ -98,7 +98,12 @@ static bool assert_inspect(ant_t *js, ant_value_t value, bool expand, assert_ins
   
   *out = (assert_inspected_t){ 0 };
   out->len = strlen(cstr.ptr);
-  out->text = cstr.needs_free ? (char *)cstr.ptr : strndup(cstr.ptr, out->len);
+  if (cstr.needs_free) {
+    out->text = (char *)cstr.ptr;
+  } else {
+    out->text = (char *)malloc(out->len + 1);
+    if (out->text) { memcpy(out->text, cstr.ptr, out->len); out->text[out->len] = '\0'; }
+  }
   if (!out->text) return false;
 
   int count = 1;

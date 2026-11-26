@@ -73,7 +73,7 @@ static ant_value_t builtin_module_isBuiltin(ant_params_t) {
 
   size_t name_len = 0;
   const char *name = js_getstr(js, args[0], &name_len);
-  return Ant_Value_FromBool(name && js_esm_is_node_builtin(name, name_len));
+  return Ant_Value_FromBool(name && js_esm_is_node_builtin(js, name, name_len));
 }
 
 static ant_value_t builtin_module_deregisterHooks(ant_params_t) {

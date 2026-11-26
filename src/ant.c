@@ -122,6 +122,7 @@ static ant_t *isolate_init(void *buf, size_t len, const ant_isolate_options_t *o
   js->defaults.stream_object_high_water_mark = 16.0;
   js->defaults.net_auto_select_family_timeout = 250.0;
   js->defaults.net_auto_select_family = true;
+  if (options && options->node_compat) js->runtime.flags |= ANT_RUNTIME_NODE_COMPAT;
   
   if (!isolate_arenas_init(js, options)) return NULL;
   if (!Ant_Host_Init(js)) return NULL;

@@ -26,10 +26,12 @@ static int run_bundle_entry(ant_t *js, const ant_bundle_module_t *entry) {
   const char *key = entry->key;
   const char *slash = strrchr(key, '/');
   
-  if (slash && slash != key) {
-    js_set_global_builtin(js, "__dirname", js_mkstr(js, key, (size_t)(slash - key)));
-  } else js_set_global_builtin(js, "__dirname", Ant_Value_Undefined);
-  js_set_global_builtin(js, "__filename", js_mkstr(js, key, strlen(key)));
+  if (js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) {
+    if (slash && slash != key) {
+      js_set_global_builtin(js, "__dirname", js_mkstr(js, key, (size_t)(slash - key)));
+    } else js_set_global_builtin(js, "__dirname", Ant_Value_Undefined);
+    js_set_global_builtin(js, "__filename", js_mkstr(js, key, strlen(key)));
+  }
 
   const char *stable_key = intern_string(js, key, strlen(key));
   if (!stable_key) stable_key = key;

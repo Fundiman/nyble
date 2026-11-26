@@ -108,8 +108,10 @@ void ant_bootstrap_modules(ant_t *js) {
   init_globals_module(js);
   init_intl_module(js);
   init_wasm_module(js);
+  bool node_compat = (js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) != 0;
+
   init_builtin_module(js);
-  init_buffer_module(js);
+  if (node_compat) init_buffer_module(js);
   init_structured_clone_module(js);
   init_headers_module(js);
   init_blob_module(js);
@@ -129,7 +131,7 @@ void ant_bootstrap_modules(ant_t *js) {
   init_transform_stream_module(js);
   init_codec_stream_module(js);
   init_compression_stream_module(js);
-  init_fs_module(js);
+  if (node_compat) init_fs_module(js);
   init_atomics_module(js);
   init_crypto_module(js);
   init_request_module(js);
@@ -137,9 +139,9 @@ void ant_bootstrap_modules(ant_t *js) {
   init_fetch_module(js);
   init_console_module(js);
   init_json_module(js);
-  init_process_module(js);
-  init_tty_module(js);
-  init_events_module(js);
+  if (node_compat) init_process_module(js);
+  if (node_compat) init_tty_module(js);
+  if (node_compat) init_events_module(js);
   init_abort_module(js);
   init_websocket_module(js);
   init_message_port_module(js);

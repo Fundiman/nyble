@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include <compat.h> // IWYU pragma: keep
 
 #include <uv.h>
@@ -1577,3 +1578,12 @@ ant_value_t sandbox_library(ant_t *js) {
   
   return lib;
 }
+
+#else
+#include "ant.h"
+#include "modules/sandbox.h"
+#include "gc/modules.h"
+
+ant_value_t sandbox_library(ant_t *js) { (void)js; return Ant_Value_Undefined; }
+void gc_mark_sandbox(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
+#endif

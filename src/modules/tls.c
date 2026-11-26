@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #elif defined(_WIN32)
 #include <wincrypt.h>
+#ifndef ANT_MBEDTLS_TLS_BACKEND
 #undef X509_NAME
 #undef X509_EXTENSIONS
 #undef X509_CERT_PAIR
@@ -24,19 +25,25 @@
 #undef PKCS7_SIGNER_INFO
 #undef OCSP_REQUEST
 #undef OCSP_RESPONSE
+#endif
 #else
 #include <unistd.h>
 #endif
 
+#ifndef ANT_MBEDTLS_TLS_BACKEND
 #include <openssl/base64.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#else
+#include <mbedtls/base64.h>
+#endif
 
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/listener.h>
 #include <tlsuv/tls_engine.h>
+#include "base64.h"
 
 #include "ant.h"
 #include "cfunc.h"
@@ -1130,6 +1137,11 @@ static ant_value_t tls_normalize_connect_options(
   return options;
 }
 
+static int tls_accept_any_cert(const struct tlsuv_certificate_s *cert, void *v_ctx) {
+  (void)cert; (void)v_ctx;
+  return 0;
+}
+
 static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_value_t callback) {
   ant_value_t obj = 0;
   ant_tls_socket_t *socket = NULL;
@@ -1217,6 +1229,13 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
       tls_socket_free(socket);
       return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to create TLS context");
     }
+  }
+
+  value = js_get(js, options, "rejectUnauthorized");
+  if (vtype(value) != kTypeUndefined && !js_truthy(js, value)) {
+    socket->authorized = false;
+    if (socket->ctx && socket->ctx->set_cert_verify)
+      socket->ctx->set_cert_verify(socket->ctx, tls_accept_any_cert, NULL);
   }
 
   value = js_get(js, options, "ALPNProtocols");
@@ -1965,6 +1984,23 @@ static int tls_strcmp_ptr(const void *a, const void *b) {
 }
 
 static ant_value_t js_tls_get_ciphers(ant_params_t) {
+  ant_value_t out = Ant_Array_Create(js);
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+  static const char *names[] = {
+    "tls_aes_128_gcm_sha256",
+    "tls_aes_256_gcm_sha384",
+    "tls_chacha20_poly1305_sha256",
+    "tls_ecdhe_ecdsa_with_aes_128_gcm_sha256",
+    "tls_ecdhe_rsa_with_aes_128_gcm_sha256",
+    "tls_ecdhe_ecdsa_with_aes_256_gcm_sha384",
+    "tls_ecdhe_rsa_with_aes_256_gcm_sha384",
+    "tls_ecdhe_ecdsa_with_chacha20_poly1305_sha256",
+    "tls_ecdhe_rsa_with_chacha20_poly1305_sha256",
+  };
+  for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++)
+    js_arr_push(js, out, js_mkstr(js, names[i], strlen(names[i])));
+  return out;
+#else
   static const uint16_t tls13_suites[] = { 0x1301, 0x1302, 0x1303 };
   SSL_CTX *ctx = SSL_CTX_new(TLS_method());
   STACK_OF(SSL_CIPHER) *ciphers = ctx ? SSL_CTX_get_ciphers(ctx) : NULL;
@@ -1973,7 +2009,6 @@ static ant_value_t js_tls_get_ciphers(ant_params_t) {
   size_t total = count + sizeof(tls13_suites) / sizeof(tls13_suites[0]);
   
   char **names = calloc(total, sizeof(char *));
-  ant_value_t out = Ant_Array_Create(js);
   size_t n = 0;
 
   for (size_t i = 0; names && i < count; i++)
@@ -1996,25 +2031,32 @@ static ant_value_t js_tls_get_ciphers(ant_params_t) {
   free(names);
   if (ctx) SSL_CTX_free(ctx);
   return out;
+#endif
 }
 
 static void tls_push_der_as_pem(ant_t *js, ant_value_t out, const uint8_t *der, size_t der_len) {
   static const char header[] = "-----BEGIN CERTIFICATE-----\n";
   static const char footer[] = "-----END CERTIFICATE-----";
-  
-  size_t b64_len = 4 * ((der_len + 2) / 3);
+
+  size_t b64_len = 4 * ((der_len + 2) / 3) + 4;
   uint8_t *b64 = malloc(b64_len + 1);
   tls_strbuf_t pem = {0};
-
   if (!b64) return;
+
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+  size_t olen = 0;
+  if (mbedtls_base64_encode(b64, b64_len + 1, &olen, der, der_len) != 0) { free(b64); return; }
+  b64_len = olen;
+#else
   EVP_EncodeBlock(b64, der, der_len);
+  b64_len = strlen((char *)b64);
+#endif
+
   tls_strbuf_puts(&pem, header);
-  
   for (size_t i = 0; i < b64_len; i += 64) {
     tls_strbuf_append(&pem, (const char *)b64 + i, b64_len - i < 64 ? b64_len - i : 64);
     tls_strbuf_puts(&pem, "\n");
   }
-  
   tls_strbuf_puts(&pem, footer);
   if (pem.data) js_arr_push(js, out, js_mkstr(js, pem.data, pem.len));
   free(pem.data);
@@ -2069,27 +2111,30 @@ static void tls_load_root_certificates(ant_t *js, ant_value_t out) {
     "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
     "/etc/ssl/certs/ca-bundle.crt",
   };
-  
-  const char *path = getenv(X509_get_default_cert_file_env());
-  BIO *bio = NULL;
-  X509 *cert = NULL;
-
-  if (!path || access(path, R_OK) != 0) path = X509_get_default_cert_file();
-  for (size_t i = 0; access(path, R_OK) != 0 && i < sizeof(bundles) / sizeof(bundles[0]); i++) path = bundles[i];
-
-  bio = BIO_new_file(path, "r");
-  if (!bio) return;
-
-  while ((cert = PEM_read_bio_X509(bio, NULL, NULL, NULL)) != NULL) {
-    uint8_t *der = NULL;
-    int der_len = i2d_X509(cert, &der);
-    if (der_len > 0) tls_push_der_as_pem(js, out, der, (size_t)der_len);
-    OPENSSL_free(der);
-    X509_free(cert);
+  const char *path = getenv("SSL_CERT_FILE");
+  FILE *f = NULL;
+  if (!path || access(path, R_OK) != 0) path = NULL;
+  for (size_t i = 0; !path && i < sizeof(bundles) / sizeof(bundles[0]); i++)
+    if (access(bundles[i], R_OK) == 0) path = bundles[i];
+  if (!path) return;
+  f = fopen(path, "rb");
+  if (!f) return;
+  fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+  if (sz <= 0) { fclose(f); return; }
+  char *buf = malloc((size_t)sz + 1);
+  if (!buf) { fclose(f); return; }
+  size_t rd = fread(buf, 1, (size_t)sz, f); fclose(f); buf[rd] = 0;
+  const char *p = buf, *end = buf + rd;
+  const char *begin = "-----BEGIN CERTIFICATE-----";
+  const char *endm = "-----END CERTIFICATE-----";
+  while ((p = strstr(p, begin)) != NULL) {
+    const char *e = strstr(p, endm);
+    if (!e || e > end) break;
+    e += strlen(endm);
+    js_arr_push(js, out, js_mkstr(js, p, (size_t)(e - p)));
+    p = e;
   }
-  
-  ERR_clear_error();
-  BIO_free(bio);
+  free(buf);
 }
 #endif
 

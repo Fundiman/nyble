@@ -29,7 +29,7 @@ def link_inputs(build_root, target):
   for arg in params:
     if arg == '-framework':
       system += [arg, next(params)]
-    elif arg.startswith('-l') or arg in ('-pthread', '-no-pie'):
+    elif arg.startswith(('-l', '-L')) or arg in ('-pthread', '-no-pie'):
       system.append(arg)
     elif arg.endswith(ARCHIVE_SUFFIXES):
       path = os.path.realpath(os.path.join(build_root, arg))
@@ -68,13 +68,14 @@ def select_archives(nm, archives):
 
 
 def merge_archives(style, tool, output, archives):
+  tool = tool if isinstance(tool, list) else [tool]
   if style == 'libtool':
-    subprocess.run([tool, '-static', '-o', output] + archives, check=True)
+    subprocess.run(tool + ['-static', '-o', output] + archives, check=True)
   elif style == 'lib':
-    subprocess.run([tool, '/NOLOGO', '/OUT:' + output] + archives, check=True)
+    subprocess.run(tool + ['/NOLOGO', '/OUT:' + output] + archives, check=True)
   else:
     script = ''.join(f'ADDLIB {a}\n' for a in archives)
-    subprocess.run([tool, '-M'], input=f'CREATE {output}\n{script}SAVE\nEND\n', text=True, check=True)
+    subprocess.run(tool + ['-M'], input=f'CREATE {output}\n{script}SAVE\nEND\n', text=True, check=True)
 
 
 def header_closure(build_root, section, headers):
@@ -141,7 +142,7 @@ def namespaced(dirs, names, header):
 def write_pc(path, version, defines, system_libs):
   cflags = ' '.join(['-I${includedir}'] + [shlex.quote(d) for d in defines])
   libs = ' '.join(['-L${libdir}', '-lant'] + [shlex.quote(a) for a in system_libs])
-  with open(path, 'w') as f:
+  with open(path, 'w', encoding='utf-8') as f:
     f.write(
       'prefix=${pcfiledir}/../..\n'
       'libdir=${prefix}/lib\n'
@@ -192,12 +193,12 @@ def bundle(args):
     content = namespaced(dirs, names, header)
     dest = os.path.join(out, 'include', name)
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, 'w', errors='surrogateescape') as f:
+    with open(dest, 'w', encoding='utf-8', errors='surrogateescape') as f:
       f.write(content)
     text.append(content)
 
   umbrella = names[os.path.join(source_root, 'include', 'ant.h')]
-  with open(os.path.join(out, 'include', 'ant.h'), 'w') as f:
+  with open(os.path.join(out, 'include', 'ant.h'), 'w', encoding='utf-8') as f:
     f.write(f'#include <{umbrella}>\n')
 
   used = set(re.findall(r'\b\w+\b', '\n'.join(text)))
@@ -214,7 +215,7 @@ def pc_fields(path):
       value = value.replace('${' + name + '}', val)
     return value
 
-  with open(path) as f:
+  with open(path, encoding='utf-8') as f:
     for line in f:
       line = line.rstrip('\n')
       if '=' in line and ':' not in line.split('=', 1)[0]:
@@ -223,7 +224,7 @@ def pc_fields(path):
       elif ': ' in line:
         name, value = line.split(': ', 1)
         fields[name] = expand(value)
-  return {name: shlex.split(fields[name]) for name in ('Cflags', 'Libs')}
+  return {name: shlex.split(fields[name], posix=(os.name != 'nt')) for name in ('Cflags', 'Libs')}
 
 
 def example(args):
@@ -244,7 +245,7 @@ def main():
   p.add_argument('--exe', required=True)
   p.add_argument('--lib', required=True)
   p.add_argument('--nm', required=True)
-  p.add_argument('--archiver', required=True)
+  p.add_argument('--archiver', nargs='+', required=True)
   p.add_argument('--archiver-style', choices=['libtool', 'mri', 'lib'], required=True)
   p.add_argument('--version', required=True)
   p.add_argument('--out', required=True)

@@ -14,6 +14,20 @@
 
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
+
+#ifndef strndup
+static inline char *ant_strndup(const char *s, size_t n) {
+  size_t len = 0;
+  while (len < n && s[len]) len++;
+  char *p = (char *)malloc(len + 1);
+  if (!p) return NULL;
+  memcpy(p, s, len);
+  p[len] = '\0';
+  return p;
+}
+#define strndup(s, n) ant_strndup((s), (n))
+#endif
 
 typedef enum {
   ANT_STRING_INTRINSIC_INDEX_OF = 0,

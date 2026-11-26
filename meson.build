@@ -369,10 +369,10 @@ if embed_archiver.found() and embed_nm.found()
 
   embed_example_args = []
   foreach arg : cc.cmd_array()
-    embed_example_args += ['--cc', arg]
+    embed_example_args += ['--cc=' + arg]
   endforeach
   foreach arg : cpp.cmd_array()
-    embed_example_args += ['--cxx', arg]
+    embed_example_args += ['--cxx=' + arg]
   endforeach
   if host_machine.system() == 'darwin'
     embed_example_args += ['--extra=' + deployment_flag]

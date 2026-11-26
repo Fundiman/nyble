@@ -44,6 +44,8 @@ tlsuv_sources = files(
 
 if tls_backend == 'boringssl'
   tlsuv_sources += files('src/boringssl/engine.c', 'src/boringssl/keychain.c', 'src/boringssl/keys.c')
+elif tls_backend == 'mbedtls'
+  tlsuv_sources += files('src/mbedtls/engine.c', 'src/mbedtls/keys.c')
 else
   tlsuv_sources += files('src/openssl/engine.c', 'src/openssl/keys.c')
 endif
@@ -69,12 +71,22 @@ elif host_machine.system() == 'linux'
   tlsuv_c_args += ['-D_POSIX_C_SOURCE=200112', '-D_GNU_SOURCE']
 endif
 
-tls_ssl_dep = dependency('ssl', required: true)
-tls_crypto_dep = dependency('crypto', required: true)
+tls_extra_dep = []
+if tls_backend == 'mbedtls'
+  tls_ssl_dep = dependency('mbedtls', required: true)
+  tls_crypto_dep = dependency('mbedx509', required: true)
+  tls_extra_dep = [dependency('mbedcrypto', required: true)]
+else
+  tls_ssl_dep = dependency('ssl', required: true)
+  tls_crypto_dep = dependency('crypto', required: true)
+endif
 
 win_deps = []
 if host_machine.system() == 'windows'
   win_deps = [cc.find_library('crypt32')]
+  if tls_backend == 'mbedtls'
+    win_deps += [cc.find_library('bcrypt')]
+  endif
 endif
 
 config_data = configuration_data()
@@ -91,7 +103,7 @@ tlsuv_lib = static_library(
   'tlsuv',
   tlsuv_sources, tlsuv_config_h,
   c_args: tlsuv_c_args,
-  dependencies: [libuv_dep, llhttp_dep, zlib_dep, tls_ssl_dep, tls_crypto_dep] + win_deps,
+  dependencies: [libuv_dep, llhttp_dep, zlib_dep, tls_ssl_dep, tls_crypto_dep] + tls_extra_dep + win_deps,
   include_directories: [
     include_directories('include'),
     include_directories('src'),
@@ -103,7 +115,7 @@ tlsuv_lib = static_library(
 
 tlsuv_dep = declare_dependency(
   link_with: tlsuv_lib,
-  dependencies: [tls_ssl_dep, tls_crypto_dep],
+  dependencies: [tls_ssl_dep, tls_crypto_dep] + tls_extra_dep,
   include_directories: [
     include_directories('include'),
     include_directories('deps/uv_link_t/include'),

@@ -201,7 +201,7 @@ void ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   for (size_t i = 0; i < ANT_PRIMORDIAL_COUNT; i++)
     js->primordial_values[i] = Ant_Value_Undefined;
   js->Ant = Ant_Object_Create(js);
-  js->runtime.flags = 0;
+  js->runtime.flags &= ANT_RUNTIME_NODE_COMPAT;
   js->runtime.argc = argc;
   js->runtime.argv = argv;
   js->runtime.pid = (int)ant_getpid();

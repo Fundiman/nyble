@@ -1,0 +1,8 @@
+[wrap-file]
+directory = mbedtls-3.6.3
+source_url = https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.6.3.tar.gz
+source_filename = mbedtls-v3.6.3.tar.gz
+source_hash = e69c4c13377e89b9d696006ef9c8258e3be75b6dbd464cfd573360482b1a1f4e
+
+[provide]
+dependency_names = mbedtls, mbedx509, mbedcrypto

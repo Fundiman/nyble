@@ -1,3 +1,183 @@
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+#include <compat.h> // IWYU pragma: keep
+
+#include <string.h>
+#include <time.h>
+#include <limits.h>
+#include <math.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+#ifndef BCRYPT_USE_SYSTEM_PREFERRED_RNG
+#define BCRYPT_USE_SYSTEM_PREFERRED_RNG 0x00000002
+#endif
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+#include <mbedtls/md.h>
+#include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/sha512.h>
+
+#include "ant.h"
+#include "cfunc.h"
+#include "internal.h"
+#include "ptr.h"
+#include "errors.h"
+#include "base64.h"
+#include "gc.h"
+#include "gc/modules.h"
+#include "silver/call.h"
+#include "ant/promise.h"
+#include "modules/crypto.h"
+#include "modules/buffer.h"
+#include "modules/domexception.h"
+
+static constexpr double CRYPTO_RANDOM_FILL_MAX_LENGTH = 2147483647.0;
+
+int crypto_fill_random(void *buf, size_t len) {
+  if (len == 0) return 0;
+  if (!buf) return -1;
+#ifdef _WIN32
+  NTSTATUS st = BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  return st == 0 ? 0 : -1;
+#else
+  int fd = open("/dev/urandom", O_RDONLY);
+  if (fd < 0) return -1;
+  size_t off = 0;
+  while (off < len) {
+    ssize_t n = read(fd, (unsigned char *)buf + off, len - off);
+    if (n <= 0) { close(fd); return -1; }
+    off += (size_t)n;
+  }
+  close(fd);
+  return 0;
+#endif
+}
+
+int crypto_random_uuid(char out[37]) {
+  static const char hex[] = "0123456789abcdef";
+  uint8_t u[16];
+  if (!out || crypto_fill_random(u, sizeof(u)) < 0) return -1;
+  u[6] = (uint8_t)((u[6] & 0x0f) | 0x40);
+  u[8] = (uint8_t)((u[8] & 0x3f) | 0x80);
+  for (int i = 0; i < 16; i++) { out[i*2] = hex[u[i] >> 4]; out[i*2+1] = hex[u[i] & 0x0f]; }
+  out[8]=out[13]=out[18]=out[23]='-'; out[36]='\0';
+  return 0;
+}
+
+static ant_value_t crypto_random_error(ant_t *js) {
+  return js_mkerr(js, "Failed to generate random bytes");
+}
+
+static ant_value_t js_crypto_random_uuid(ant_params_t) {
+  (void)args; (void)nargs;
+  char uuid[37];
+  if (crypto_random_uuid(uuid) < 0) return crypto_random_error(js);
+  return js_mkstr(js, uuid, 36);
+}
+
+static ant_value_t js_crypto_get_random_values(ant_params_t) {
+  if (nargs < 1) return js_mkerr(js, "getRandomValues requires a TypedArray argument");
+  TypedArrayData *ta = buffer_get_typedarray_data(args[0]);
+  if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "getRandomValues requires a TypedArray argument");
+  uint8_t *ptr; size_t len;
+  Ant_Buffer_GetViewBytes(ta, &ptr, &len);
+  if (len > 65536) return js_mkerr(js, "TypedArray byte length exceeds 65536");
+  if (crypto_fill_random(ptr, len) < 0) return crypto_random_error(js);
+  return args[0];
+}
+
+static ant_value_t js_crypto_random_bytes(ant_params_t) {
+  if (nargs < 1) return js_mkerr(js, "randomBytes requires size");
+  double n = js_to_number(js, args[0]);
+  if (!isfinite(n) || n < 0 || n > CRYPTO_RANDOM_FILL_MAX_LENGTH)
+    return js_mkerr(js, "invalid randomBytes size");
+  size_t len = (size_t)n;
+  uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+  if (!buf) return Ant_Error_CreateOutOfMemory(js);
+  if (crypto_fill_random(buf, len) < 0) { free(buf); return crypto_random_error(js); }
+  ant_value_t out = create_arraybuffer_copy(js, buf, len);
+  free(buf);
+  return out;
+}
+
+static const mbedtls_md_info_t *crypto_md_info(ant_t *js, ant_value_t alg) {
+  const char *name = NULL;
+  if (vtype(alg) == kTypeString) {
+    name = js_getstr(js, alg, NULL);
+  } else if (vtype(alg) == kTypeObject) {
+    ant_value_t n = js_get(js, alg, "name");
+    if (vtype(n) == kTypeString) name = js_getstr(js, n, NULL);
+  }
+  if (!name) return NULL;
+  if (strcasecmp(name, "SHA-1") == 0 || strcasecmp(name, "SHA1") == 0) return mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+  if (strcasecmp(name, "SHA-256") == 0 || strcasecmp(name, "SHA256") == 0) return mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (strcasecmp(name, "SHA-384") == 0 || strcasecmp(name, "SHA384") == 0) return mbedtls_md_info_from_type(MBEDTLS_MD_SHA384);
+  if (strcasecmp(name, "SHA-512") == 0 || strcasecmp(name, "SHA512") == 0) return mbedtls_md_info_from_type(MBEDTLS_MD_SHA512);
+  return NULL;
+}
+
+static ant_value_t js_crypto_subtle_digest(ant_params_t) {
+  ant_value_t promise = js_mkpromise(js);
+  if (nargs < 2) { js_reject_promise(js, promise, js_mkerr(js, "subtle.digest requires algorithm and data")); return promise; }
+  const mbedtls_md_info_t *md = crypto_md_info(js, args[0]);
+  if (!md) { js_reject_promise(js, promise, make_dom_exception(js, "Unsupported digest algorithm", "NotSupportedError")); return promise; }
+
+  uint8_t *ptr = NULL; size_t len = 0;
+  TypedArrayData *ta = buffer_get_typedarray_data(args[1]);
+  if (ta) {
+    Ant_Buffer_GetViewBytes(ta, &ptr, &len);
+  } else {
+    ArrayBufferData *ab = buffer_get_arraybuffer_data(args[1]);
+    if (ab && !ab->is_detached) { ptr = ab->data; len = ab->length; }
+  }
+  if (!ptr && len != 0) { js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "data must be BufferSource")); return promise; }
+
+  unsigned char out[MBEDTLS_MD_MAX_SIZE];
+  size_t out_len = mbedtls_md_get_size(md);
+  if (mbedtls_md(md, ptr, len, out) != 0) {
+    js_reject_promise(js, promise, js_mkerr(js, "digest failed"));
+    return promise;
+  }
+  ant_value_t abuf = create_arraybuffer_copy(js, out, out_len);
+  js_resolve_promise(js, promise, abuf);
+  return promise;
+}
+
+static ant_value_t make_subtle(ant_t *js) {
+  ant_value_t subtle = Ant_Object_Create(js);
+  js_set(js, subtle, "digest", Ant_Function_Create(js_crypto_subtle_digest));
+  return subtle;
+}
+
+void gc_mark_crypto(ant_t *js, gc_mark_fn mark) { (void)js; (void)mark; }
+
+void init_crypto_module(ant_t *js) {
+  ant_value_t g = js_glob(js);
+  ant_value_t crypto_obj = js_get(js, g, "crypto");
+  if (vtype(crypto_obj) != kTypeObject) crypto_obj = Ant_Object_Create(js);
+  js_set(js, crypto_obj, "randomUUID", Ant_Function_CreateWithArity(js_crypto_random_uuid, 0));
+  js_set(js, crypto_obj, "getRandomValues", Ant_Function_Create(js_crypto_get_random_values));
+  js_set(js, crypto_obj, "randomBytes", Ant_Function_CreateWithArity(js_crypto_random_bytes, 1));
+  js_set(js, crypto_obj, "subtle", make_subtle(js));
+  js_set(js, g, "crypto", crypto_obj);
+}
+
+ant_value_t crypto_library(ant_t *js) {
+  ant_value_t lib = Ant_Object_Create(js);
+  js_set(js, lib, "randomUUID", Ant_Function_CreateWithArity(js_crypto_random_uuid, 0));
+  js_set(js, lib, "getRandomValues", Ant_Function_Create(js_crypto_get_random_values));
+  js_set(js, lib, "randomBytes", Ant_Function_CreateWithArity(js_crypto_random_bytes, 1));
+  js_set(js, lib, "subtle", make_subtle(js));
+  js_set(js, lib, "webcrypto", lib);
+  return lib;
+}
+
+#else /* ANT_MBEDTLS_TLS_BACKEND */
 #include <compat.h> // IWYU pragma: keep
 #include <uv.h>
 #include <string.h>
@@ -2601,3 +2781,5 @@ ant_value_t crypto_library(ant_t *js) {
 
   return lib;
 }
+
+#endif /* ANT_MBEDTLS_TLS_BACKEND */

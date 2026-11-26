@@ -4027,6 +4027,26 @@ static ant_value_t builtin_fs_mkdir(ant_params_t) {
   return req->promise;
 }
 
+#ifdef _WIN32
+#include <direct.h>
+static char *ant_mkdtemp(char *tmpl) {
+  size_t len = strlen(tmpl);
+  if (len < 6) { errno = EINVAL; return NULL; }
+  char *xs = tmpl + len - 6;
+  if (strcmp(xs, "XXXXXX") != 0) { errno = EINVAL; return NULL; }
+  static const char chars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+  for (int attempt = 0; attempt < 100; attempt++) {
+    for (int i = 0; i < 6; i++) xs[i] = chars[rand() % (int)(sizeof(chars) - 1)];
+    if (_mkdir(tmpl) == 0) return tmpl;
+    if (errno != EEXIST) return NULL;
+  }
+  errno = EEXIST;
+  return NULL;
+}
+#else
+#define ant_mkdtemp mkdtemp
+#endif
+
 static ant_value_t builtin_fs_mkdtempSync(ant_params_t) {
   if (nargs > 0) {
     args[0] = fs_coerce_path(js, args[0]);
@@ -4047,7 +4067,7 @@ static ant_value_t builtin_fs_mkdtempSync(ant_params_t) {
   memcpy(tpl + prefix_len, "XXXXXX", 6);
   tpl[tpl_len] = '\0';
 
-  char *result = mkdtemp(tpl);
+  char *result = ant_mkdtemp(tpl);
   if (!result) {
     free(tpl);
     return js_mkerr(js, "mkdtempSync failed: %s", strerror(errno));

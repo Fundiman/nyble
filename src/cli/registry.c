@@ -1,3 +1,9 @@
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+#include <stdio.h>
+int pkg_cmd_login(int argc, char **argv) { (void)argc; (void)argv; fprintf(stderr, "registry unavailable in this build\n"); return 1; }
+int pkg_cmd_publish(int argc, char **argv) { (void)argc; (void)argv; fprintf(stderr, "registry unavailable in this build\n"); return 1; }
+
+#else /* ANT_MBEDTLS_TLS_BACKEND */
 #include <compat.h> // IWYU pragma: keep
 
 #include "cli/registry.h"
@@ -1227,3 +1233,5 @@ int pkg_cmd_publish(int argc, char **argv) {
   publish_payload_free(&payload);
   return EXIT_SUCCESS;
 }
+
+#endif /* ANT_MBEDTLS_TLS_BACKEND */

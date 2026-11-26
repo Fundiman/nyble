@@ -674,15 +674,17 @@ void ant_repl_run(ant_t *js, const char *startup_code) {
   ant_history_init(&history, 512);
   ant_history_load(&history);
 
-  js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
-  js_set_global_builtin(js, "__filename", js_mkstr(js, "[repl]", 6));
+  if (js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) {
+    js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
+    js_set_global_builtin(js, "__filename", js_mkstr(js, "[repl]", 6));
 
-  char cwd[PATH_MAX];
-  char repl_path[PATH_MAX + 8];
-  
-  if (getcwd(cwd, sizeof(cwd))) {
-    snprintf(repl_path, sizeof(repl_path), "%s/[repl]", cwd);
-    js_set_global_builtin(js, "require", esm_create_require_from_path(js, repl_path));
+    char cwd[PATH_MAX];
+    char repl_path[PATH_MAX + 8];
+    
+    if (getcwd(cwd, sizeof(cwd))) {
+      snprintf(repl_path, sizeof(repl_path), "%s/[repl]", cwd);
+      js_set_global_builtin(js, "require", esm_create_require_from_path(js, repl_path));
+    }
   }
 
   js_set(js, js_glob(js), "_", Ant_Value_Undefined);

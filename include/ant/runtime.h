@@ -4,6 +4,7 @@
 
 typedef struct ant_isolate_options {
   size_t object_arena_bytes;
+  bool node_compat;
 } ant_isolate_options_t;
 
 // create a new ant isolate

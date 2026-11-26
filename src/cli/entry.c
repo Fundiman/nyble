@@ -40,6 +40,8 @@ ant_argv_t ant_entry_process_argv(const char *argv0, const char *first, bool res
 }
 
 static ant_value_t set_commonjs_globals(ant_t *js, const char *tag) {
+  if (!(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT)) return Ant_Value_Undefined;
+
   char cwd[PATH_MAX];
   char path[PATH_MAX + 16];
   
@@ -102,8 +104,10 @@ int ant_entry_eval(
   js_set_filename(js, tag);
   js_setup_import_meta(js, tag);
 
-  js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
-  js_set_global_builtin(js, "__filename", js_mkstr(js, tag, strlen(tag)));
+  if (js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) {
+    js_set_global_builtin(js, "__dirname", js_mkstr(js, ".", 1));
+    js_set_global_builtin(js, "__filename", js_mkstr(js, tag, strlen(tag)));
+  }
 
   ant_value_t result = eval_source(js, source, len, tag, mode);
 
@@ -180,6 +184,7 @@ int ant_entry_stdin(ant_t *js, bool print, ant_input_mode_t mode, bool inspect) 
 }
 
 static void set_module_globals(ant_t *js, const char *filename) {
+  if (!(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT)) return;
   if (esm_is_url(filename)) js_set_global_builtin(js, "__dirname", Ant_Value_Undefined);
   else {
     char *path = strdup(filename);

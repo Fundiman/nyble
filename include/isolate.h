@@ -79,7 +79,8 @@ static constexpr int MAX_DENSE_INITIAL_CAP = 8;
 // many elements, so filling it stays on the fast path
 static constexpr uint32_t MAX_DENSE_PREALLOC_LEN = 65536;
 static constexpr uint32_t INTERN_INDEX_CACHE_SIZE = 1024;
-static constexpr uint32_t ANT_RUNTIME_WEB_COMPAT = 1u << 0;
+static constexpr uint32_t ANT_RUNTIME_WEB_COMPAT  = 1u << 0;
+static constexpr uint32_t ANT_RUNTIME_NODE_COMPAT = 1u << 1;
 
 static constexpr uint32_t INTERN_MEMO_SIZE = 64;
 static constexpr uint32_t CJS_BUILTIN_CACHE_SIZE = 8;

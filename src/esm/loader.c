@@ -2130,23 +2130,33 @@ static bool esm_static_dependency_specifier(sv_ast_t *stmt, sv_ast_t **out_spec)
   return false;
 }
 
+static bool esm_builtin_is_node(esm_builtin_t builtin) {
+  return builtin.kind == ANT_BUILTIN_NAME_NODE || builtin.kind == ANT_BUILTIN_NAME_BARE;
+}
+
 esm_builtin_t esm_find_builtin(ant_t *js, const char *specifier, size_t spec_len) {
   const ant_builtin_bundle_alias_t *alias = esm_lookup_builtin_alias(specifier, spec_len);
-  if (alias) return (esm_builtin_t){ .alias = alias, .kind = alias->kind };
+  if (alias) {
+    esm_builtin_t b = { .alias = alias, .kind = alias->kind };
+    if (js && !(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) && esm_builtin_is_node(b))
+      return (esm_builtin_t){ .kind = ANT_BUILTIN_NAME_NONE };
+    return b;
+  }
 
   ant_builtin_name_kind_t kind;
   const ant_library_entry_t *library = ant_library_find(specifier, spec_len, &kind);
-  if (library) return (esm_builtin_t){ .library = library, .kind = kind };
+  if (library) {
+    esm_builtin_t b = { .library = library, .kind = kind };
+    if (js && !(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT) && esm_builtin_is_node(b))
+      return (esm_builtin_t){ .kind = ANT_BUILTIN_NAME_NONE };
+    return b;
+  }
 
   const ant_host_module_t *host = js ? ant_host_module_find(js, specifier, spec_len) : NULL;
   if (!host) return (esm_builtin_t){ .kind = ANT_BUILTIN_NAME_NONE };
   if (host->source) return (esm_builtin_t){ .host = host, .kind = ANT_BUILTIN_NAME_ANT };
 
   return (esm_builtin_t){ .library = &host->entry, .kind = ANT_BUILTIN_NAME_ANT };
-}
-
-static bool esm_builtin_is_node(esm_builtin_t builtin) {
-  return builtin.kind == ANT_BUILTIN_NAME_NODE || builtin.kind == ANT_BUILTIN_NAME_BARE;
 }
 
 static const char *esm_builtin_name(esm_builtin_t builtin) {
@@ -2193,11 +2203,17 @@ ant_value_t esm_require_load_builtin(ant_t *js, const char *specifier, esm_built
   return esm_load_builtin(js, specifier, builtin);
 }
 
-bool js_esm_is_node_builtin(const char *specifier, size_t spec_len) {
-  return esm_builtin_is_node(esm_find_builtin(NULL, specifier, spec_len));
+bool js_esm_is_node_builtin(ant_t *js, const char *specifier, size_t spec_len) {
+  if (js && !(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT)) return false;
+  return esm_builtin_is_node(esm_find_builtin(js, specifier, spec_len));
 }
 
 ant_value_t js_esm_load_node_builtin(ant_t *js, const char *specifier, size_t spec_len, bool *found) {
+  if (!(js->runtime.flags & ANT_RUNTIME_NODE_COMPAT)) {
+    *found = false;
+    return Ant_Value_Undefined;
+  }
+
   esm_builtin_t builtin = esm_find_builtin(js, specifier, spec_len);
   
   *found = esm_builtin_is_node(builtin);

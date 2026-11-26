@@ -1,54 +1,59 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include <openssl/evp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+#include <mbedtls/sha1.h>
+#else
+#include <openssl/evp.h>
+#endif
+
 #include "base64.h"
 #include "http/websocket.h"
 
 const char *ant_ws_find_header(const ant_http_header_t *headers, const char *name) {
-  for (const ant_http_header_t *entry = headers; entry; entry = entry->next) 
+  for (const ant_http_header_t *entry = headers; entry; entry = entry->next)
     if (entry->name && name && strcasecmp(entry->name, name) == 0) return entry->value;
   return NULL;
 }
 
 bool ant_ws_header_contains_token(const char *value, const char *token) {
   size_t token_len = token ? strlen(token) : 0;
-  const char *p = value;
+  const char *pstr = value;
 
   if (!value || !token || token_len == 0) return false;
-  while (*p) {
-    while (*p == ' ' || *p == '\t' || *p == ',') p++;
-    const char *start = p;
-    while (*p && *p != ',') p++;
-    const char *end = p;
+  while (*pstr) {
+    while (*pstr == ' ' || *pstr == '\t' || *pstr == ',') pstr++;
+    const char *start = pstr;
+    while (*pstr && *pstr != ',') pstr++;
+    const char *end = pstr;
     while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
     if ((size_t)(end - start) == token_len && strncasecmp(start, token, token_len) == 0) return true;
-    if (*p == ',') p++;
+    if (*pstr == ',') pstr++;
   }
-  
+
   return false;
 }
 
 bool ant_ws_header_contains_extension(const char *value, const char *extension) {
   size_t extension_len = extension ? strlen(extension) : 0;
-  const char *p = value;
+  const char *pstr = value;
 
   if (!value || !extension || extension_len == 0) return false;
-  while (*p) {
-    while (*p == ' ' || *p == '\t' || *p == ',') p++;
-    const char *start = p;
-    while (*p && *p != ';' && *p != ',') p++;
-    const char *end = p;
+  while (*pstr) {
+    while (*pstr == ' ' || *pstr == '\t' || *pstr == ',') pstr++;
+    const char *start = pstr;
+    while (*pstr && *pstr != ';' && *pstr != ',') pstr++;
+    const char *end = pstr;
     while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
     if ((size_t)(end - start) == extension_len && strncasecmp(start, extension, extension_len) == 0)
       return true;
-    while (*p && *p != ',') p++;
-    if (*p == ',') p++;
+    while (*pstr && *pstr != ',') pstr++;
+    if (*pstr == ',') pstr++;
   }
 
   return false;
@@ -59,7 +64,7 @@ bool ant_ws_validate_client_handshake(const ant_http_header_t *headers, const ch
   const char *connection = ant_ws_find_header(headers, "connection");
   const char *version = ant_ws_find_header(headers, "sec-websocket-version");
   const char *key = ant_ws_find_header(headers, "sec-websocket-key");
-  
+
   size_t decoded_len = 0;
   uint8_t *decoded = NULL;
 
@@ -77,18 +82,14 @@ bool ant_ws_validate_client_handshake(const ant_http_header_t *headers, const ch
 
   free(decoded);
   if (key_out) *key_out = key;
-  
+
   return true;
 }
 
 char *ant_ws_accept_key(const char *client_key) {
-  unsigned char digest[EVP_MAX_MD_SIZE];
-  unsigned int digest_len = 0;
-  
   size_t out_len = 0;
   size_t key_len = client_key ? strlen(client_key) : 0;
   size_t input_len = key_len + strlen(ANT_WS_GUID);
-  
   char *input = malloc(input_len);
   char *encoded = NULL;
 
@@ -100,15 +101,26 @@ char *ant_ws_accept_key(const char *client_key) {
   memcpy(input, client_key, key_len);
   memcpy(input + key_len, ANT_WS_GUID, strlen(ANT_WS_GUID));
 
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+  unsigned char digest[20];
+  if (mbedtls_sha1((const unsigned char *)input, input_len, digest) != 0) {
+    free(input);
+    return NULL;
+  }
+  free(input);
+  encoded = ant_base64_encode(digest, sizeof(digest), &out_len);
+#else
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
   if (EVP_Digest(input, input_len, digest, &digest_len, EVP_sha1(), NULL) != 1) {
     free(input);
     return NULL;
   }
-
   free(input);
   encoded = ant_base64_encode(digest, digest_len, &out_len);
+#endif
   if (encoded) encoded[out_len] = '\0';
-  
+
   return encoded;
 }
 
@@ -122,11 +134,11 @@ void ant_ws_unmask(uint8_t *data, size_t len, const uint8_t mask[4]) {
   size_t i = 0;
   if (len >= 8) {
     uint64_t mask64 = 0;
-    uint8_t rep[8] = { 
-      mask[0], mask[1], mask[2], mask[3], 
-      mask[0], mask[1], mask[2], mask[3] 
+    uint8_t rep[8] = {
+      mask[0], mask[1], mask[2], mask[3],
+      mask[0], mask[1], mask[2], mask[3]
     };
-    
+
     memcpy(&mask64, rep, 8);
     for (; i + 8 <= len; i += 8) {
       uint64_t word = 0;
@@ -135,7 +147,7 @@ void ant_ws_unmask(uint8_t *data, size_t len, const uint8_t mask[4]) {
       memcpy(data + i, &word, 8);
     }
   }
-  
+
   for (; i < len; i++) data[i] ^= mask[i & 3];
 }
 
@@ -186,13 +198,13 @@ ant_ws_frame_result_t ant_ws_parse_frame(
 
   if (payload_len > SIZE_MAX) return ANT_WS_FRAME_PROTOCOL_ERROR;
   if (payload_len > max_payload) return ANT_WS_FRAME_TOO_BIG;
-  
+
   if (masked) {
     if (len < pos + 4) return ANT_WS_FRAME_INCOMPLETE;
     memcpy(out->mask, data + pos, 4);
     pos += 4;
   }
-  
+
   if (len < pos + (size_t)payload_len) return ANT_WS_FRAME_INCOMPLETE;
 
   if (inplace) {
@@ -205,8 +217,8 @@ ant_ws_frame_result_t ant_ws_parse_frame(
     out->payload[payload_len] = 0;
     out->owned = true;
   }
-  
-  if (masked && payload_len > 0) 
+
+  if (masked && payload_len > 0)
     ant_ws_unmask(out->payload, (size_t)payload_len, out->mask);
 
   out->fin = (data[0] & 0x80u) != 0;
@@ -215,7 +227,7 @@ ant_ws_frame_result_t ant_ws_parse_frame(
   out->opcode = (ant_ws_opcode_t)opcode;
   out->payload_len = (size_t)payload_len;
   out->consumed_len = pos + (size_t)payload_len;
-  
+
   return ANT_WS_FRAME_OK;
 }
 
@@ -281,7 +293,7 @@ uint8_t *ant_ws_encode_close_frame(uint16_t code, const char *reason, bool mask,
   uint8_t payload[125];
   payload[0] = (uint8_t)(code >> 8);
   payload[1] = (uint8_t)(code & 0xffu);
-  
+
   if (reason_len > 0) memcpy(payload + 2, reason, reason_len);
   return ant_ws_encode_frame(ANT_WS_OPCODE_CLOSE, payload, 2 + reason_len, mask, false, out_len);
 }
