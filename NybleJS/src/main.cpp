@@ -483,10 +483,11 @@ int main(int argc, char* argv[]) {
                 rerender(prompt, lineBuffer, cursorPos);
             }
 
-            if (source.empty() && lineBuffer == "exit") {
-                disableRawMode();
-                break;
-            }
+        }
+
+        if (source.empty() && lineBuffer == "exit") {
+            if (!piped) disableRawMode();
+            break;
         }
 
         if (lineBuffer.empty() && source.empty()) continue;
