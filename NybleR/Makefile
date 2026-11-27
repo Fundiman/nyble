@@ -15,6 +15,14 @@ endif
 
 NYBLER_MESON ?= $(PYTHON) $(CURDIR)/tools/meson_clock.py
 
+# Keep this in a variable: commas inside $(if ...) would be parsed as argument
+# separators. Meson looks for versioned python3.X shims on Windows.
+ifeq ($(OS),Windows_NT)
+PY_WRAPPERS = $(PYTHON) -c "import os,sys; d=r'$(PREFIX)/bin'; v='python%d.%d.bat' % (sys.version_info[0], sys.version_info[1]); data='@' + sys.executable + ' %*\n'; open(os.path.join(d, 'python3.bat'), 'w').write(data); open(os.path.join(d, v), 'w').write(data)"
+else
+PY_WRAPPERS =
+endif
+
 BUILD ?= build
 BUILD_TYPE ?= Release
 PREFIX ?= $(CURDIR)/$(BUILD)/local
@@ -192,7 +200,7 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -E make_directory $(NYBLER_TMP)
 	$(CMAKE) -E make_directory $(PREFIX)/bin
-	$(if $(filter Windows_NT,$(OS)),$(PYTHON) -c "import os,sys; d=r'$(PREFIX)/bin'; v='python%d.%d.bat' % (sys.version_info[0], sys.version_info[1]); data='@' + sys.executable + ' %*\n'; open(os.path.join(d, 'python3.bat'), 'w').write(data); open(os.path.join(d, v), 'w').write(data)",)
+	$(PY_WRAPPERS)
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) setup $(MESA_BUILD) $(MESA_SRC) \
 		--prefix=$(PREFIX) \
 		--buildtype=release \
