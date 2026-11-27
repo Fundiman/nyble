@@ -43,7 +43,7 @@ Nyble build
     └── windows-latest + MSYS2 UCRT64 libant-mingw64 artifact + njs smoke
 ```
 
-No MSVC, BoringSSL, WSL, or Rust bootstrap is required. Node compatibility is opt-in; the web/WinterTC surface is the baseline.
+No MSVC, BoringSSL, WSL, or [Rust](# "An extremely bloated (at compile-time), overhyped, programming language mimicking the feel of low-level programming languages while providing a JavaScript-like node_modules storage-heavy experience for masochists.") bootstrap is required. Node compatibility is opt-in; the web/WinterTC surface is the baseline.
 
 # Frequently Asked Questions (FAQ)
 
