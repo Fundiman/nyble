@@ -25,6 +25,8 @@ struct NyblerQueue {
 struct NyblerDevice {
   NyblerAdapter *adapter;
   NyblerQueue *queue;
+  NyblerBackend backend;
+  void *backend_context;
 };
 
 struct NyblerShaderModule {
@@ -47,6 +49,7 @@ struct NyblerTexture {
   NyblerDevice *device;
   NyblerTextureDescriptor descriptor;
   char *label;
+  void *backend;
 };
 
 struct NyblerSampler {
@@ -91,6 +94,7 @@ struct NyblerRenderPipeline {
   NyblerPrimitiveTopology topology;
   const NyblerBindGroupLayout *layout;
   char *label;
+  void *backend;
 };
 
 typedef enum NyblerCommandKind {
@@ -100,7 +104,8 @@ typedef enum NyblerCommandKind {
   NYBLER_COMMAND_SET_PIPELINE,
   NYBLER_COMMAND_SET_BIND_GROUP,
   NYBLER_COMMAND_SET_VERTEX_BUFFER,
-  NYBLER_COMMAND_DRAW
+  NYBLER_COMMAND_DRAW,
+  NYBLER_COMMAND_COPY_TEXTURE_TO_BUFFER
 } NyblerCommandKind;
 
 typedef struct NyblerCommand {
@@ -129,6 +134,11 @@ typedef struct NyblerCommand {
       uint32_t first_vertex;
       uint32_t first_instance;
     } draw;
+    struct {
+      NyblerImageCopyTexture source;
+      NyblerImageCopyBuffer destination;
+      NyblerExtent3D size;
+    } copy_texture_to_buffer;
   } data;
 } NyblerCommand;
 

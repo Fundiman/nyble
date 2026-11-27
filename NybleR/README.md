@@ -61,7 +61,8 @@ Targets:
 - `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
 - `shader-smoke` — instance/adapter/device lifecycle and full WGSL → SPIR-V/GLSL compile smoke test
 - `resources-smoke` — buffers, textures, samplers, bind groups, pipelines, render passes, command buffers, and queue submission smoke test
-- `check` — run all four smoke tests
+- `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
+- `check` — run all five smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -78,6 +79,26 @@ clang 22 exhausts the paging file while parsing Mesa's generated `api_trace.c`,
 even at `-O0`. NybleR and Tint still use clang. `MESA_CC`, `MESA_CXX`,
 `MESA_TARGET_FLAGS`, `MESA_BUILDTYPE`, and `MESA_ARGS` can be overridden to
 enable LLVM drivers or a different toolchain when available.
+
+## Backend behavior
+
+`nybler_init()` accepts `NYBLER_BACKEND_AUTO`, `NYBLER_BACKEND_MESA_GL`, and
+`NYBLER_BACKEND_NULL`. Mesa Vulkan remains unavailable locally because lavapipe
+requires LLVM. `AUTO` uses Mesa GL when EGL/GLES initialization succeeds and
+falls back to the null backend otherwise; explicit Mesa GL fails with
+`NYBLER_ERROR_BACKEND_UNAVAILABLE`.
+
+The Mesa backend resolves `libEGL`/`libGLESv2` entry points at runtime, so the
+stable `nybler_*` ABI does not link against a Mesa build. Consumers must make
+the locally built DLLs in `NybleR/build/local/bin` discoverable (for example via
+`PATH` on Windows). `make -C NybleR check` sets this path for every smoke test.
+
+`nybler_command_encoder_copy_texture_to_buffer()` records a WebGPU-shaped
+texture readback into a `NYBLER_BUFFER_USAGE_COPY_DST` buffer. `bytes_per_row`
+must be at least the packed row size; rows are packed into the destination
+without a 256-byte alignment requirement. `nybler_buffer_read()` then exposes
+the result. Backend-specific format or usage rejections are normal WebGPU
+capability behavior.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.

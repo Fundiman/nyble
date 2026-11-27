@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "mesa_backend.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,22 @@ static int nybler_in_range(uint32_t value, uint32_t first, uint32_t last) {
 static int nybler_buffer_fits(const NyblerBuffer *buffer, uint64_t offset, uint64_t size) {
   if (!buffer || offset > buffer->size) return 0;
   return size <= buffer->size - offset;
+}
+
+static uint32_t nybler_texture_bytes_per_pixel(NyblerTextureFormat format) {
+  switch (format) {
+    case NYBLER_TEXTURE_FORMAT_R8_UNORM: return 1;
+    case NYBLER_TEXTURE_FORMAT_RG8_UNORM: return 2;
+    case NYBLER_TEXTURE_FORMAT_RGBA8_UNORM:
+    case NYBLER_TEXTURE_FORMAT_BGRA8_UNORM:
+    case NYBLER_TEXTURE_FORMAT_R32_FLOAT:
+    case NYBLER_TEXTURE_FORMAT_DEPTH24_PLUS:
+    case NYBLER_TEXTURE_FORMAT_DEPTH32_FLOAT: return 4;
+    case NYBLER_TEXTURE_FORMAT_R16_FLOAT: return 2;
+    case NYBLER_TEXTURE_FORMAT_RG32_FLOAT: return 8;
+    case NYBLER_TEXTURE_FORMAT_RGBA32_FLOAT: return 16;
+    default: return 0;
+  }
 }
 
 NyblerResult nybler_device_create_buffer(
@@ -125,6 +142,7 @@ NyblerResult nybler_device_create_texture(
   NyblerTexture **out_texture
 ) {
   NyblerTexture *texture;
+  NyblerResult result;
 
   if (!device || !descriptor || !out_texture) return NYBLER_ERROR_INVALID_ARGUMENT;
   *out_texture = NULL;
@@ -150,12 +168,20 @@ NyblerResult nybler_device_create_texture(
     }
   }
   texture->device = device;
+  result = nybler_mesa_create_texture(
+    (NyblerMesaContext *)device->backend_context, texture);
+  if (result != NYBLER_OK) {
+    free(texture->label);
+    free(texture);
+    return result;
+  }
   *out_texture = texture;
   return NYBLER_OK;
 }
 
 void nybler_texture_release(NyblerTexture *texture) {
   if (!texture) return;
+  nybler_mesa_destroy_texture(texture);
   free(texture->label);
   free(texture);
 }
@@ -373,6 +399,7 @@ NyblerResult nybler_device_create_render_pipeline(
   NyblerRenderPipeline **out_pipeline
 ) {
   NyblerRenderPipeline *pipeline;
+  NyblerResult result;
   size_t i;
 
   if (!device || !descriptor || !out_pipeline) return NYBLER_ERROR_INVALID_ARGUMENT;
@@ -425,12 +452,19 @@ NyblerResult nybler_device_create_render_pipeline(
   pipeline->target_count = descriptor->target_count;
   pipeline->topology = descriptor->topology;
   pipeline->layout = descriptor->layout;
+  result = nybler_mesa_create_pipeline(
+    (NyblerMesaContext *)device->backend_context, pipeline);
+  if (result != NYBLER_OK) {
+    nybler_render_pipeline_release(pipeline);
+    return result;
+  }
   *out_pipeline = pipeline;
   return NYBLER_OK;
 }
 
 void nybler_render_pipeline_release(NyblerRenderPipeline *pipeline) {
   if (!pipeline) return;
+  nybler_mesa_destroy_pipeline(pipeline);
   free(pipeline->label);
   free(pipeline->vertex_entry_point);
   free(pipeline->fragment_entry_point);
@@ -644,6 +678,65 @@ void nybler_render_pass_draw(
   (void)nybler_append_pass_command(pass, NYBLER_COMMAND_DRAW, &command);
 }
 
+NyblerResult nybler_command_encoder_copy_texture_to_buffer(
+  NyblerCommandEncoder *encoder,
+  const NyblerImageCopyTexture *source,
+  const NyblerImageCopyBuffer *destination,
+  const NyblerExtent3D *copy_size
+) {
+  NyblerCommand command;
+  uint32_t bytes_per_pixel;
+  uint64_t row_size;
+  uint64_t required;
+  const NyblerTextureDescriptor *descriptor;
+
+  if (!encoder || !source || !destination || !copy_size) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+  if (encoder->active_pass && !encoder->active_pass->ended) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+  descriptor = source->texture ? &source->texture->descriptor : NULL;
+  if (!descriptor ||
+      !(descriptor->usage & NYBLER_TEXTURE_USAGE_COPY_SRC) ||
+      !destination->buffer ||
+      !(destination->buffer->usage & NYBLER_BUFFER_USAGE_COPY_DST)) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+  if (source->mip_level >= descriptor->mip_level_count) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+
+  bytes_per_pixel = nybler_texture_bytes_per_pixel(descriptor->format);
+  if (!bytes_per_pixel || copy_size->width == 0 || copy_size->height == 0 ||
+      copy_size->depth_or_array_layers == 0 ||
+      (uint64_t)source->origin.x + copy_size->width > descriptor->size.width ||
+      (uint64_t)source->origin.y + copy_size->height > descriptor->size.height ||
+      (uint64_t)source->origin.z + copy_size->depth_or_array_layers >
+        descriptor->size.depth_or_array_layers) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+
+  row_size = (uint64_t)copy_size->width * bytes_per_pixel;
+  if (destination->bytes_per_row < row_size ||
+      (destination->rows_per_image &&
+       destination->rows_per_image < copy_size->height)) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+  required = ((uint64_t)copy_size->height - 1) * destination->bytes_per_row +
+    row_size;
+  if (!nybler_buffer_fits(destination->buffer, destination->offset, required)) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+
+  memset(&command, 0, sizeof(command));
+  command.kind = NYBLER_COMMAND_COPY_TEXTURE_TO_BUFFER;
+  command.data.copy_texture_to_buffer.source = *source;
+  command.data.copy_texture_to_buffer.destination = *destination;
+  command.data.copy_texture_to_buffer.size = *copy_size;
+  return nybler_encoder_append(encoder, &command);
+}
+
 void nybler_render_pass_end(NyblerRenderPassEncoder *pass) {
   NyblerCommand command;
 
@@ -707,6 +800,7 @@ NyblerResult nybler_queue_submit(
   size_t command_count,
   NyblerCommandBuffer *const *commands
 ) {
+  NyblerResult result;
   size_t i;
 
   if (!queue || !queue->device || !commands) return NYBLER_ERROR_INVALID_ARGUMENT;
@@ -716,10 +810,18 @@ NyblerResult nybler_queue_submit(
     }
   }
 
-  /* Commands are validated and consumed here. Mesa-backed execution is wired
-   * in when the local software renderer is integrated. */
+  result = NYBLER_OK;
+  if (queue->device->backend_context) {
+    result = nybler_mesa_execute(
+      (NyblerMesaContext *)queue->device->backend_context,
+      command_count,
+      commands
+    );
+  }
+
+  /* Commands are validated and consumed here. */
   for (i = 0; i < command_count; ++i) {
     nybler_command_buffer_release(commands[i]);
   }
-  return NYBLER_OK;
+  return result;
 }

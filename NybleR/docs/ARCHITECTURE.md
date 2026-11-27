@@ -36,6 +36,7 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - bind group layouts and bind groups
 - render/compute pipelines
 - command encoders and pass encoders
+- texture-to-buffer copy views and buffer readback
 - queue submission and presentation
 
 Lexbor stays private behind `src/document.c`; callers never see Lexbor types or
@@ -50,8 +51,16 @@ document.
 `src/resources.c` implements the WebGPU-style object graph. Devices borrow
 adapters, resources and queues borrow devices, render pass encoders borrow their
 command encoder, and command buffers are consumed by `nybler_queue_submit()`.
-Command buffers currently record validated render-pass commands; Mesa-backed
-execution is wired in as the local software renderer is integrated.
+Command buffers record validated render-pass and texture-copy commands;
+submission executes them through the selected backend before consuming them.
+
+`src/mesa_backend.c` is the local Mesa GL implementation. It dynamically loads
+EGL and GLES entry points, creates an offscreen pbuffer/surfaceless context,
+backs WebGPU-style textures with GLES textures and framebuffer objects, and
+executes clear, draw, and copy commands. The public ABI does not link against
+Mesa, so Dawn/Mesa details stay private. `NYBLER_BACKEND_AUTO` falls back to the
+null backend when Mesa cannot initialize; explicit Mesa GL reports
+`NYBLER_ERROR_BACKEND_UNAVAILABLE`.
 
 Dawn, SDL3 GPU, and raylib are not the public API. They are possible future
 implementation details behind this surface.
@@ -70,8 +79,11 @@ SPIR-V input → magic/alignment check → Vulkan/lavapipe
 
 `nybler_shader_compile()` exposes standalone compilation for tooling and tests.
 Shader modules always store SPIR-V; failures carry Tint diagnostics through the
-optional `out_error` parameter. GLSL output currently targets the `main` entry
-point for the local Mesa GL path.
+optional `out_error` parameter. The local Mesa GL backend currently validates
+pipeline creation with fixed GLSL ES 300 programs instead of translating each
+pipeline's WGSL entry points. Full WGSL is still parsed, validated, and compiled
+to SPIR-V when the shader module is created; using fixed GLSL only limits the
+visual output of the software validation path, not the accepted WGSL language.
 
 Backend capability checks are not a WGSL subset parser. A shader may compile as
 full WGSL and still be rejected by a specific backend when it uses features that

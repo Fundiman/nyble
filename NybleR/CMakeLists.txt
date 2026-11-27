@@ -6,6 +6,7 @@ set(NYBLER_SOURCES
   src/document.c
   src/layout.c
   src/instance.c
+  src/mesa_backend.c
   src/resources.c
   src/shader_bridge.cpp
   src/version.c
@@ -49,6 +50,10 @@ if(TINT_ROOT)
     target_link_libraries(nybler PUBLIC
       "-Wl,--start-group" ${TINT_LIBRARIES} "-Wl,--end-group")
   endif()
+endif()
+
+if(UNIX)
+  target_link_libraries(nybler PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
 target_compile_features(nybler PUBLIC c_std_11 cxx_std_17)

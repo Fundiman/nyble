@@ -17,7 +17,11 @@ int main(void) {
     "@fragment fn fs_main() -> @location(0) vec4<f32> {\n"
     "  return vec4<f32>(1.0, 0.0, 0.0, 1.0);\n"
     "}\n";
-  static const float initial_vertices[] = {0.0f, 0.0f, 0.0f, 1.0f};
+  static const float initial_vertices[] = {
+    -1.0f, -1.0f, 0.0f, 1.0f,
+     1.0f, -1.0f, 0.0f, 1.0f,
+     0.0f,  1.0f, 0.0f, 1.0f
+  };
   static const float uniform_value = 1.0f;
 
   NyblerInitOptions options = {1, NYBLER_BACKEND_AUTO, 1, NULL};
@@ -52,7 +56,7 @@ int main(void) {
   NyblerRenderPassEncoder *pass = NULL;
   NyblerRenderPassEncoder *nested = NULL;
   NyblerCommandBuffer *commands = NULL;
-  float readback[4] = {0};
+  float readback[12] = {0};
   int ok = 1;
 
   ok = check(nybler_init(&options, &instance) == NYBLER_OK, "init") && ok;

@@ -207,6 +207,12 @@ typedef struct NyblerExtent3D {
   uint32_t depth_or_array_layers;
 } NyblerExtent3D;
 
+typedef struct NyblerOrigin3D {
+  uint32_t x;
+  uint32_t y;
+  uint32_t z;
+} NyblerOrigin3D;
+
 typedef struct NyblerBufferDescriptor {
   uint64_t size;
   uint32_t usage;
@@ -294,6 +300,21 @@ typedef struct NyblerRenderPassDescriptor {
   size_t color_attachment_count;
   const char *label;
 } NyblerRenderPassDescriptor;
+
+/* Readback uses WebGPU-shaped copy views. bytes_per_row must be at least the
+ * packed row size; the backend packs each row into the destination buffer. */
+typedef struct NyblerImageCopyTexture {
+  NyblerTexture *texture;
+  uint32_t mip_level;
+  NyblerOrigin3D origin;
+} NyblerImageCopyTexture;
+
+typedef struct NyblerImageCopyBuffer {
+  NyblerBuffer *buffer;
+  uint64_t offset;
+  uint32_t bytes_per_row;
+  uint32_t rows_per_image;
+} NyblerImageCopyBuffer;
 
 typedef struct NyblerInitOptions {
   uint32_t version;
@@ -505,6 +526,12 @@ NYBLER_API void nybler_render_pass_draw(
   uint32_t instance_count,
   uint32_t first_vertex,
   uint32_t first_instance
+);
+NYBLER_API NyblerResult nybler_command_encoder_copy_texture_to_buffer(
+  NyblerCommandEncoder *encoder,
+  const NyblerImageCopyTexture *source,
+  const NyblerImageCopyBuffer *destination,
+  const NyblerExtent3D *copy_size
 );
 NYBLER_API void nybler_render_pass_end(NyblerRenderPassEncoder *pass);
 NYBLER_API NyblerResult nybler_command_encoder_finish(

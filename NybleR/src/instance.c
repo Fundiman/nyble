@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "mesa_backend.h"
 
 #include "shader_bridge.h"
 
@@ -16,8 +17,9 @@ NyblerResult nybler_init(
   if (options->version != 1) return NYBLER_ERROR_UNSUPPORTED;
 
   if (options->backend != NYBLER_BACKEND_AUTO &&
+      options->backend != NYBLER_BACKEND_MESA_GL &&
       options->backend != NYBLER_BACKEND_NULL) {
-    /* Mesa-backed adapters arrive with the GL/Vulkan backend integration. */
+    /* Mesa Vulkan needs a local LLVM-capable driver build. */
     return NYBLER_ERROR_BACKEND_UNAVAILABLE;
   }
 
@@ -70,6 +72,8 @@ NyblerResult nybler_adapter_request_device(
   NyblerDevice **out_device
 ) {
   NyblerDevice *device;
+  NyblerMesaContext *context = NULL;
+  NyblerResult result;
 
   if (!adapter || !adapter->instance || !out_device) {
     return NYBLER_ERROR_INVALID_ARGUMENT;
@@ -79,6 +83,7 @@ NyblerResult nybler_adapter_request_device(
   device = (NyblerDevice *)calloc(1, sizeof(*device));
   if (!device) return NYBLER_ERROR_OUT_OF_MEMORY;
   device->adapter = adapter;
+  device->backend = adapter->instance->backend;
 
   device->queue = (NyblerQueue *)calloc(1, sizeof(*device->queue));
   if (!device->queue) {
@@ -87,12 +92,30 @@ NyblerResult nybler_adapter_request_device(
   }
   device->queue->device = device;
 
+  if (device->backend == NYBLER_BACKEND_AUTO ||
+      device->backend == NYBLER_BACKEND_MESA_GL) {
+    result = nybler_mesa_init(&context);
+    if (result == NYBLER_OK) {
+      device->backend = NYBLER_BACKEND_MESA_GL;
+      device->backend_context = context;
+    } else if (adapter->instance->backend == NYBLER_BACKEND_MESA_GL) {
+      free(device->queue);
+      free(device);
+      return result;
+    } else {
+      device->backend = NYBLER_BACKEND_NULL;
+    }
+  } else {
+    device->backend = NYBLER_BACKEND_NULL;
+  }
+
   *out_device = device;
   return NYBLER_OK;
 }
 
 void nybler_device_release(NyblerDevice *device) {
   if (!device) return;
+  nybler_mesa_destroy((NyblerMesaContext *)device->backend_context);
   free(device->queue);
   free(device);
 }
