@@ -59,7 +59,8 @@ Targets:
 - `nybler` — build the NybleR static library and C/C++ headers
 - `dom-smoke` — public `nybler_*` DOM API smoke test: `<h1> hello world </h1>` → `hello world`
 - `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
-- `check` — run both smoke tests
+- `shader-smoke` — instance/adapter/device lifecycle and full WGSL → SPIR-V/GLSL compile smoke test
+- `check` — run all three smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 

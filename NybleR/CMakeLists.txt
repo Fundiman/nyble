@@ -6,6 +6,7 @@ set(NYBLER_SOURCES
   src/document.c
   src/layout.c
   src/instance.c
+  src/shader_bridge.cpp
   src/version.c
 )
 
@@ -21,6 +22,32 @@ target_include_directories(nybler
 if(LEXBOR_ROOT)
   target_include_directories(nybler PRIVATE "${LEXBOR_ROOT}/include")
   target_compile_definitions(nybler PRIVATE LEXBOR_STATIC)
+endif()
+
+if(NOT TINT_ROOT AND CMAKE_PREFIX_PATH)
+  list(GET CMAKE_PREFIX_PATH 0 TINT_ROOT)
+endif()
+if(TINT_ROOT)
+  set(TINT_INCLUDE_DIR "${TINT_ROOT}/include/src/tint")
+  if(WIN32)
+    file(GLOB TINT_LIBRARIES "${TINT_ROOT}/lib/tint*.lib")
+  else()
+    file(GLOB TINT_LIBRARIES "${TINT_ROOT}/lib/libtint*.a")
+  endif()
+  if(NOT EXISTS "${TINT_INCLUDE_DIR}")
+    message(FATAL_ERROR "Tint headers are missing from ${TINT_INCLUDE_DIR}")
+  endif()
+  if(NOT TINT_LIBRARIES)
+    message(FATAL_ERROR "Tint libraries are missing from ${TINT_ROOT}/lib")
+  endif()
+
+  target_include_directories(nybler PRIVATE "${TINT_INCLUDE_DIR}")
+  if(APPLE)
+    target_link_libraries(nybler PUBLIC ${TINT_LIBRARIES} ${TINT_LIBRARIES})
+  else()
+    target_link_libraries(nybler PUBLIC
+      "-Wl,--start-group" ${TINT_LIBRARIES} "-Wl,--end-group")
+  endif()
 endif()
 
 target_compile_features(nybler PUBLIC c_std_11 cxx_std_17)

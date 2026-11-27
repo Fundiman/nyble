@@ -50,15 +50,19 @@ implementation details behind this surface.
 ## Shader strategy
 
 NybleR accepts full WGSL source through Tint. The preferred binary IR is SPIR-V.
+`src/shader_bridge.cpp` is the only C++ file that includes Tint headers; it
+exposes a small `extern "C"` entry point used by `src/instance.c`.
 
 ```text
 WGSL → Tint → SPIR-V → Vulkan/lavapipe
 WGSL → Tint/GLSL → OpenGL/llvmpipe
-SPIR-V input → validate → Vulkan/lavapipe
+SPIR-V input → magic/alignment check → Vulkan/lavapipe
 ```
 
-GLSL/MSL/HLSL writers are kept for backend portability. Mesa only consumes the
-GLSL and SPIR-V paths.
+`nybler_shader_compile()` exposes standalone compilation for tooling and tests.
+Shader modules always store SPIR-V; failures carry Tint diagnostics through the
+optional `out_error` parameter. GLSL output currently targets the `main` entry
+point for the local Mesa GL path.
 
 Backend capability checks are not a WGSL subset parser. A shader may compile as
 full WGSL and still be rejected by a specific backend when it uses features that

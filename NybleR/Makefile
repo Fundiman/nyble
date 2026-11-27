@@ -66,6 +66,7 @@ GLSLANG_SRC := $(TINT_SRC)/third_party/vulkan-deps/glslang/src
 
 LEXBOR_BUILD := $(CURDIR)/$(BUILD)/lexbor
 TINT_BUILD := $(CURDIR)/$(BUILD)/tint
+TINT_ABSL_BUILD := $(TINT_BUILD)/third_party/abseil
 MESA_BUILD := $(CURDIR)/$(BUILD)/mesa
 GLSLANG_BUILD := $(CURDIR)/$(BUILD)/glslang
 ifeq ($(OS),Windows_NT)
@@ -94,15 +95,32 @@ MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Deg
 
 DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 LAYOUT_SMOKE_BIN := $(CURDIR)/$(BUILD)/layout-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+SHADER_SMOKE_BIN := $(CURDIR)/$(BUILD)/shader-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
+DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
+LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
+SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.obj
 LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
 NYBLER_LIB ?= $(NYBLER_BUILD)/nybler.lib
+NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/tint*.lib)
+NYBLER_ABSL_LIBS = $(wildcard $(PREFIX)/lib/absl*.lib)
+# clang++ on Windows uses the MSVC ABI and lld-link by default, so GNU linker
+# flags such as -static-libstdc++ and --start-group are ignored there.
+NYBLER_CXX_LINK_FLAGS ?=
+NYBLER_LINK_TINT = $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) $(NYBLER_ABSL_LIBS)
 else
+DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.o
+LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.o
+SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.o
 LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
 NYBLER_LIB ?= $(NYBLER_BUILD)/libnybler.a
+NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/libtint*.a)
+NYBLER_ABSL_LIBS = $(wildcard $(PREFIX)/lib/libabsl*.a)
+NYBLER_CXX_LINK_FLAGS ?=
+NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke check clean
 
 all: deps nybler
 
@@ -160,6 +178,7 @@ $(TINT_STAMP): $(DEPOT_TOOLS)
 	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --parallel $(NYBLER_JOBS)
 	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --target tint_utils_bytes --parallel $(NYBLER_JOBS)
 	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --install $(TINT_BUILD)
+	$(PYTHON) $(CURDIR)/tools/copy_abseil_libs.py $(TINT_ABSL_BUILD) $(PREFIX)/lib
 	$(CMAKE) -E touch $@
 
 $(GLSLANG_STAMP):
@@ -210,7 +229,7 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
-$(NYBLER_STAMP):
+$(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP)
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -S $(CURDIR) -B $(NYBLER_BUILD) -G $(CMAKE_GENERATOR) \
 		-DCMAKE_C_COMPILER=$(NYBLER_CC) \
@@ -218,6 +237,7 @@ $(NYBLER_STAMP):
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_PREFIX_PATH=$(PREFIX) \
 		-DLEXBOR_ROOT=$(PREFIX) \
+		-DTINT_ROOT=$(PREFIX) \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX)
 	$(CMAKE) --build $(NYBLER_BUILD) --config $(BUILD_TYPE) --parallel $(NYBLER_JOBS)
 	$(CMAKE) --install $(NYBLER_BUILD) --config $(BUILD_TYPE)
@@ -227,19 +247,33 @@ dom-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
 	$(NYBLER_CC) -std=c11 -DLEXBOR_STATIC \
 		-I$(CURDIR)/include -I$(PREFIX)/include \
-		-o $(DOM_SMOKE_BIN) $(CURDIR)/tests/dom_smoke.c \
-		$(NYBLER_LIB) $(LEXBOR_LIB)
+		-c -o $(DOM_SMOKE_OBJ) $(CURDIR)/tests/dom_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(DOM_SMOKE_BIN) $(DOM_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
 	$(DOM_SMOKE_BIN)
 
 layout-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
 	$(NYBLER_CC) -std=c11 -DLEXBOR_STATIC \
 		-I$(CURDIR)/include -I$(PREFIX)/include \
-		-o $(LAYOUT_SMOKE_BIN) $(CURDIR)/tests/layout_smoke.c \
-		$(NYBLER_LIB) $(LEXBOR_LIB)
+		-c -o $(LAYOUT_SMOKE_OBJ) $(CURDIR)/tests/layout_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(LAYOUT_SMOKE_BIN) $(LAYOUT_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
 	$(LAYOUT_SMOKE_BIN)
 
-check: nybler dom-smoke layout-smoke
+shader-smoke: nybler lexbor
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 \
+		-I$(CURDIR)/include \
+		-c -o $(SHADER_SMOKE_OBJ) $(CURDIR)/tests/shader_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(SHADER_SMOKE_BIN) $(SHADER_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+	$(SHADER_SMOKE_BIN)
+
+check: nybler dom-smoke layout-smoke shader-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:

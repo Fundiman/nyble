@@ -119,6 +119,9 @@ NYBLER_API NyblerResult nybler_init(
   NyblerInstance **out_instance
 );
 NYBLER_API void nybler_shutdown(NyblerInstance *instance);
+
+/* Adapters borrow their instance. Devices borrow their adapter and must be
+ * released before the adapter or instance. */
 NYBLER_API NyblerResult nybler_instance_request_adapter(
   NyblerInstance *instance,
   NyblerAdapter **out_adapter
@@ -206,6 +209,22 @@ NYBLER_API NyblerResult nybler_shader_module_create(
   NyblerShaderModule **out_module
 );
 NYBLER_API void nybler_shader_module_release(NyblerShaderModule *module);
+
+/* Standalone full-WGSL compilation through Tint. `source_format` accepts WGSL
+ * or SPIR-V; `target_format` accepts WGSL (identity), SPIR-V, or GLSL. Codes
+ * returned here are owned by the caller and must be released with
+ * nybler_shader_code_release(). When `out_error` is non-NULL, compile failures
+ * write a diagnostic string that must be released with nybler_string_release(). */
+NYBLER_API NyblerResult nybler_shader_compile(
+  NyblerShaderFormat source_format,
+  const void *source,
+  size_t source_size,
+  NyblerShaderFormat target_format,
+  uint8_t **out_code,
+  size_t *out_code_size,
+  char **out_error
+);
+NYBLER_API void nybler_shader_code_release(uint8_t *code);
 
 #ifdef __cplusplus
 }
