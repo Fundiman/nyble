@@ -158,7 +158,7 @@ Ant is a **git submodule**, not a downloaded release and not a vendored copy of 
 ```
 
 - The submodule tracks the **`ant` branch** of the same GitHub repository, which mirrors Ant Silver's **`master`** branch (not a "latest stable" tag) plus Nyble-specific patches.
-- The checked-out commit at the time of writing is `a63e19ff` — `nyble: mbedtls tls/crypto/ws unstubs, node-compat runtime gate`.
+- The checked-out commit at the time of writing is `f684e91a` — `crypto: restore mbedTLS parity and secure RNG`.
 - Nyble-specific Ant changes are committed inside the submodule, then the superproject records the new submodule pointer. The Windows CA-store fix for tlsuv is also preserved as `patches/tlsuv-win-ca-stores.patch` at the superproject root.
 - Never fetch engine sources from a release/archive URL. `git submodule update` is the supported path.
 
@@ -182,7 +182,7 @@ Bootstrapped by `ant_bootstrap_modules()` (`third_party/ant/src/bootstrap.c`) an
 - Globals/internals: `Symbol`, iterator/generator helpers, `Reflect`, `Proxy`, `Math`, `BigInt`, `Date`, `Intl`, `JSON`, `console`, `structuredClone`, `AbortController`, `DOMException`.
 - Web platform: `fetch`, `Request`, `Response`, `Headers`, `Blob`, `FormData`, `URL`, `URLSearchParams`, `TextEncoder`/`TextDecoder`, `EventSource`, `WebSocket`, `MessagePort`, `Web Worker`, `Navigator`, `localStorage`, `sessionStorage`, `performance`, `Observable`, timers (`setTimeout`, `setInterval`, ...), streams (readable/writable/transform/codec/compression), cron, WASM, and SQLite/host modules where enabled.
 - Collections: `Map`, `Set`, `WeakMap`, `WeakSet`, queuing strategies.
-- Local embed caveat: `temporal` and `encoding_rs` are disabled in the local build; `crypto.subtle` support is partial (see below).
+- Local embed caveat: `temporal` and `encoding_rs` are disabled in the local build; mbedTLS-backed crypto coverage is described below.
 
 ### Node.js compatibility
 
@@ -212,8 +212,8 @@ With node compat off, browser APIs are unchanged; only the Node-flavored globals
 - **No BoringSSL.** The embed is configured with `-Dtls_backend=mbedtls`, using tlsuv's mbedTLS engine.
 - TLS verification **fails closed**: a self-signed host (`self-signed.badssl.com`) is rejected. Valid certificates work (`example.com:443` connects).
 - Windows certificate loading patches tlsuv to include the `ROOT`, `CA`, and `AuthRoot` system stores; the patch lives in `patches/tlsuv-win-ca-stores.patch`.
-- `rejectUnauthorized: false` is wired through tlsuv's cert-verify accept callback as a debug/compat escape hatch. Default verification remains on, and the per-connection/per-context semantics are still being audited.
-- `src/modules/crypto.c` provides partial mbedTLS-backed Node/WebCrypto basics: `randomUUID`, `crypto.getRandomValues`, `randomBytes`, and `subtle.digest` for SHA-1/256/384/512. Full `subtle` parity is future work.
+- `rejectUnauthorized: false` is applied per connection via tlsuv stream state; it never mutates the shared TLS context, so one lax connection cannot weaken a later strict one. `getProtocol()` reports the negotiated version and peer certificate/authorization info is exposed by the Node shim. Default verification remains on.
+- `src/modules/crypto.c` is mbedTLS-backed and covers the Node/WebCrypto basics: `random*`, `getRandomValues`, `createHash`/`createHmac`, `createCipheriv`/`createDecipheriv`, `pbkdf2`/`scrypt`, and `subtle.digest`, plus `subtle.importKey`/`generateKey`/`exportKey` (raw HMAC/AES-GCM), `deriveBits`, `sign`/`verify`, `encrypt`/`decrypt`, and `timingSafeEqual`. Asymmetric algorithms and non-raw key formats are not implemented.
 - `src/http/websocket.c` has its SHA1 accept-key and frame logic unstubbed for `ANT_MBEDTLS_TLS_BACKEND`.
 - `src/cli/registry.c` is **intentionally still a stub**; registry parity is not claimed.
 
@@ -724,8 +724,8 @@ The C++ layer uses RAII: `RootedValue` unroots on destruction, supports move sem
 **Still missing / partial in v1:**
 
 - `src/cli/registry.c` in Ant is intentionally stubbed; no registry parity.
-- TLS: `getProtocol()` currently returns `undefined` in the Node shim; `rejectUnauthorized: false` mutates context verification state and needs to be made per-connection; peer certificate/authorization semantics have not been audited. Verification is fail-closed by default.
-- Crypto: `crypto.subtle` only covers `digest` with SHA-1/256/384/512 plus the random helpers above. No full WebCrypto/Node crypto parity.
+- TLS: verification is fail-closed by default, `getProtocol()` reports the negotiated version, and `rejectUnauthorized: false` is per connection. Peer certificate/authorization info is exposed, but broader TLS plumbing is not claimed to be fully Node-equivalent.
+- Crypto: mbedTLS-backed Node/WebCrypto basics are implemented (hashes, HMAC, AES-GCM/Cipher, PBKDF2/scrypt, random helpers, raw HMAC/AES-GCM keys, sign/verify, encrypt/decrypt, `deriveBits`, `timingSafeEqual`). Asymmetric algorithms, JWK/other key formats, and key wrapping are still missing.
 - WebSocket/registry behavior beyond the unstubbed SHA1/frame paths is not fully verified against Node.
 - Node compatibility surface is intentionally partial: `Buffer`, `fs`, `process`, `tty`, `events`, and node/bare builtin resolution are gated; broader Node APIs are not guaranteed.
 - Local embed disables `temporal` and `encoding_rs`; those Ant features are not in the shipped `njs.exe` yet.
@@ -884,7 +884,7 @@ In the `njs` CLI, yes by default (for script compatibility). In the runtime and 
 Because `bootstrap.c` gates `process`, `tty`, `events`, `fs`, and `Buffer` behind `ANT_RUNTIME_NODE_COMPAT`, and the ESM loader blocks `node:`/bare builtin resolution when it is off.
 
 **Is TLS verification optional?**
-Verification is on by default and fails closed. `rejectUnauthorized: false` exists for debug/compat via tlsuv's accept callback, but its scoping is still being audited; do not depend on it for production security decisions.
+Verification is on by default and fails closed. `rejectUnauthorized: false` is scoped to the individual connection and does not change the shared TLS context; do not depend on it for production security decisions.
 
 **Can I embed multiple isolates?**
 Yes. Each `nyble::Engine` creates its own Ant isolate with its own global scope and GC arena; copy construction is disabled to keep ownership clear.
