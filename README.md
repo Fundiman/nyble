@@ -3,6 +3,28 @@ Nyble is a web browser built from scratch designed for modern websites — think
 
 Most browsers need literal super computers to compile; Nyble does not.
 
+# Dependency tree
+
+This is a dependency view, not the repository directory layout:
+
+```text
+Nyble
+├── NybleJS                       CLI + embedding front end (C++)
+│   └── AntJS                     Ant Silver engine (C, git submodule)
+│       ├── libuv                 event loop, timers, streams
+│       ├── tlsuv                 TLS/stream wrapper
+│       │   └── mbedTLS           TLS + crypto backend (no BoringSSL)
+│       ├── mimalloc              allocator
+│       ├── pcre2                 regular expressions
+│       ├── sqlite3               SQLite host module
+│       ├── zlib-ng               compression
+│       ├── wasm-micro-runtime    WebAssembly
+│       ├── skim                  TypeScript stripping
+│       └── upm                   Ant package manager
+```
+
+Node compatibility is opt-in; the web/WinterTC surface is the baseline.
+
 # Frequently Asked Questions (FAQ)
 
 <details>
