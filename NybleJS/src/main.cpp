@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <map>
@@ -9,6 +10,9 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <termios.h>
+#include <unistd.h>
 #endif
 #include "cats.h"
 #include "engine/ant_engine.h"
@@ -297,6 +301,59 @@ static int readKey() {
             }
         }
     }
+}
+#else
+static struct termios origTermios;
+static bool origTermiosValid = false;
+
+static bool stdinIsTTY() {
+    return isatty(STDIN_FILENO) != 0;
+}
+
+static void enableRawMode() {
+    if (!stdinIsTTY()) return;
+    if (tcgetattr(STDIN_FILENO, &origTermios) != 0) return;
+    struct termios raw = origTermios;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_iflag &= ~(ICRNL | IXON);
+    raw.c_cflag |= CS8;
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) origTermiosValid = true;
+}
+
+static void disableRawMode() {
+    if (!origTermiosValid) return;
+    tcsetattr(STDIN_FILENO, TCSANOW, &origTermios);
+    origTermiosValid = false;
+}
+
+static int readKey() {
+    int ch = std::fgetc(stdin);
+    if (ch == EOF) return -1;
+    if (ch != 0x1b) return ch;  // ESC prefix for arrows/Home/End/Delete
+
+    int next = std::fgetc(stdin);
+    if (next == EOF) return 0x1b;  // lone ESC
+
+    if (next == '[' || next == 'O') {
+        int code = std::fgetc(stdin);
+        switch (code) {
+            case 'A': return 0x100;  // Up
+            case 'B': return 0x101;  // Down
+            case 'C': return 0x103;  // Right
+            case 'D': return 0x102;  // Left
+            case 'H': return 0x104;  // Home
+            case 'F': return 0x105;  // End
+            case '3': {              // "3~" Delete
+                int tail = std::fgetc(stdin);
+                (void)tail;
+                return 0x106;
+            }
+            default: break;
+        }
+    }
+    return 0x1b;  // unrecognized escape; keep the REPL alive
 }
 #endif
 

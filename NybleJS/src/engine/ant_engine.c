@@ -162,6 +162,9 @@ int nyble_engine_eval(nyble_engine *e, const char *src, size_t len, char **out) 
 
     if (vtype(v) == kTypeError) {
         *out = nyble_strdup(js_str(e->js, v));
+        /* Consume the pending throw so js_run_event_loop() cannot turn a
+         * recoverable eval error into process exit. */
+        Ant_Exception_Clear(e->js);
         return 0;
     }
 

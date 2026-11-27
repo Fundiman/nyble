@@ -245,7 +245,7 @@ With node compat off, browser APIs are unchanged; only the Node-flavored globals
 - **No Rust porting.** The embed archive already contains what Ant needs; do not translate anything to Rust.
 - **No BoringSSL.** Use the mbedTLS TLS backend.
 
-Current supported local target: **Windows x86_64, mingw-w64 ABI**. The POSIX path needs a `stdinIsTTY()` shim in `src/main.cpp` (see [Compatibility and known gaps](#compatibility-and-known-gaps)).
+Current supported local target: **Windows x86_64, mingw-w64 ABI**. The CLI/REPL sources also carry POSIX `termios`/`isatty` shims, but the shipped Ant embed archive is Windows-only; a POSIX host needs a POSIX `libant.a`.
 
 ### Get the Ant submodule
 
@@ -537,7 +537,7 @@ Uncaught Error: boom
 2
 ```
 
-`eval()` exceptions, `std::exception`s, and even unknown C++ exceptions are caught in the REPL loop. The partial input buffer is cleared and the next prompt appears. `engine.drainEventLoop()` is called after successful evals (and inside the protected region) so async work still runs. The process exits only via `exit`, Ctrl+D, EOF, or a CLI-level error before the REPL starts.
+`eval()` exceptions, `std::exception`s, and even unknown C++ exceptions are caught in the REPL loop. The partial input buffer is cleared and the next prompt appears. The bridge consumes Ant's pending throw after reporting it, so `engine.drainEventLoop()` cannot turn a recoverable eval error into process exit; it is still called after every eval (inside the protected region) so async work runs. The process exits only via `exit`, Ctrl+D, EOF, or a CLI-level error before the REPL starts.
 
 ---
 
@@ -724,7 +724,7 @@ The C++ layer uses RAII: `RootedValue` unroots on destruction, supports move sem
 - WebSocket/registry behavior beyond the unstubbed SHA1/frame paths is not fully verified against Node.
 - Node compatibility surface is intentionally partial: `Buffer`, `fs`, `process`, `tty`, `events`, and node/bare builtin resolution are gated; broader Node APIs are not guaranteed.
 - Local embed disables `temporal` and `encoding_rs`; those Ant features are not in the shipped `njs.exe` yet.
-- POSIX builds: `stdinIsTTY()` is currently implemented only under `_WIN32` while `main()` calls it unconditionally. A small POSIX shim is needed before claiming Linux/macOS support.
+- POSIX builds: the REPL now has `isatty`/`termios` shims for `stdinIsTTY()`, raw mode and arrow/Home/End/Delete keys, but no POSIX `libant.a` is shipped; you must build Ant for the POSIX target yourself. Up/Down still lack a history buffer on both platforms.
 - `-engine jit` is a stub that errors out.
 - Up/Down arrow keys are parsed in the REPL but no history buffer is attached.
 
