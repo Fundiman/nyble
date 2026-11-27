@@ -1,5 +1,5 @@
-# Nyble - a web browser built from scratch
-Nyble is a web browser built from scratch designed for modern websites - think of Discord or Youtube.
+# Nyble — a web browser built from scratch
+Nyble is a web browser built from scratch designed for modern websites — think of Discord or Youtube.
 
 Most browsers need literal super computers to compile; Nyble does not.
 
