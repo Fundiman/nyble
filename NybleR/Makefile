@@ -26,6 +26,16 @@ NYBLER_CXX ?= clang++
 NYBLER_JOBS ?= 2
 NYBLER_TMP := $(CURDIR)/$(BUILD)/tmp
 
+ifeq ($(OS),Windows_NT)
+NYBLER_TARGET ?= x86_64-w64-mingw32
+NYBLER_MINGW_BIN ?= C:/ProgramData/mingw64/mingw64/bin
+MESON_ENV = CC="$(NYBLER_CC)" CXX="$(NYBLER_CXX)" \
+	CFLAGS="--target=$(NYBLER_TARGET)" CXXFLAGS="--target=$(NYBLER_TARGET)" \
+	PATH="$(NYBLER_MINGW_BIN):$$PATH"
+else
+MESON_ENV =
+endif
+
 ROOT := $(abspath ..)
 LEXBOR_SRC := $(ROOT)/third_party/lexbor
 TINT_SRC := $(ROOT)/third_party/tint
@@ -114,12 +124,12 @@ $(TINT_STAMP): $(DEPOT_TOOLS)
 $(MESA_STAMP):
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -E make_directory $(NYBLER_TMP)
-	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) setup $(MESA_BUILD) $(MESA_SRC) \
+	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) setup $(MESA_BUILD) $(MESA_SRC) \
 		--prefix=$(PREFIX) \
 		--buildtype=release \
 		$(MESA_ARGS)
-	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
-	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) install -C $(MESA_BUILD)
+	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
+	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
 $(NYBLER_STAMP):
