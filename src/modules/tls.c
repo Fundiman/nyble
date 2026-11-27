@@ -106,6 +106,8 @@ struct ant_tls_socket_s {
   uint64_t bytes_written;
   bool owns_ctx;
   bool authorized;
+  bool reject_unauthorized; /* default true; per-socket, never a context mutation */
+  char *authorization_error;
   bool connecting;
   bool destroyed;
   bool closing;
@@ -196,6 +198,38 @@ static ant_value_t tls_make_buffer_chunk(ant_t *js, const char *data, size_t len
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, js->builtins.buffer_proto);
 }
 
+static void tls_socket_set_authorization_error(ant_tls_socket_t *socket, const char *message) {
+  if (!socket) return;
+  free(socket->authorization_error);
+  socket->authorization_error = NULL;
+  if (message && *message) socket->authorization_error = strdup(message);
+}
+
+/* Called after a successful handshake. Verification flags are captured by
+ * tlsuv before any application verify callback was allowed to override them. */
+static void tls_socket_update_authorization(ant_tls_socket_t *socket, bool expect_peer_cert) {
+  uint32_t flags = 0;
+
+  if (!socket) return;
+  if (!socket->reject_unauthorized) {
+    socket->authorized = false;
+    tls_socket_set_authorization_error(socket, "certificate verification disabled");
+    return;
+  }
+  if (!expect_peer_cert) {
+    socket->authorized = false;
+    tls_socket_set_authorization_error(socket, NULL);
+    return;
+  }
+  if (tlsuv_stream_get_verify_result(&socket->stream, &flags) == 0 && flags != 0) {
+    socket->authorized = false;
+    tls_socket_set_authorization_error(socket, "certificate verification failed");
+    return;
+  }
+  socket->authorized = true;
+  tls_socket_set_authorization_error(socket, NULL);
+}
+
 static void tls_socket_sync_state(ant_tls_socket_t *socket) {
   ant_t *js = NULL;
   const char *ready_state = "open";
@@ -207,7 +241,10 @@ static void tls_socket_sync_state(ant_tls_socket_t *socket) {
 
   js_set(js, socket->obj, "encrypted", Ant_Value_True);
   js_set(js, socket->obj, "authorized", Ant_Value_FromBool(socket->authorized));
-  js_set(js, socket->obj, "authorizationError", Ant_Value_Null);
+  js_set(js, socket->obj, "authorizationError",
+         socket->authorization_error
+           ? js_mkstr(js, socket->authorization_error, strlen(socket->authorization_error))
+           : Ant_Value_Null);
   js_set(js, socket->obj, "secureConnecting", Ant_Value_FromBool(socket->connecting));
   js_set(js, socket->obj, "connecting", Ant_Value_FromBool(socket->connecting));
   
@@ -291,6 +328,7 @@ static void tls_socket_free(ant_tls_socket_t *socket) {
   
   free(socket->host);
   free(socket->servername);
+  free(socket->authorization_error);
   free(socket);
 }
 
@@ -606,7 +644,12 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
   socket->connecting = false;
 
   if (status < 0) {
+    uint32_t flags = 0;
     if (socket->closing || socket->destroyed) return;
+    if (tlsuv_stream_get_verify_result(&socket->stream, &flags) == 0 && flags != 0) {
+      tls_socket_set_authorization_error(socket, "certificate verification failed");
+      socket->authorized = false;
+    }
     ant_value_t err = tls_stream_error(socket, status, "TLS connect failed");
     socket->had_error = true;
     tls_socket_sync_state(socket);
@@ -621,6 +664,7 @@ static void tls_socket_on_connect(uv_connect_t *req, int status) {
     js_set(js, socket->obj, "alpnProtocol", js_mkstr(js, protocol, strlen(protocol)));
   else js_set(js, socket->obj, "alpnProtocol", Ant_Value_False);
 
+  tls_socket_update_authorization(socket, true);
   tlsuv_stream_read_start(&socket->stream, tls_alloc_cb, tls_socket_on_read);
   tls_socket_sync_state(socket);
   eventemitter_emit_args(js, socket->obj, "secureConnect", NULL, 0);
@@ -808,25 +852,118 @@ static ant_value_t js_tls_socket_uncork(ant_params_t) {
   return call_this;
 }
 
+static int tls_cipher_bits(const char *name) {
+  if (!name) return 0;
+  if (strstr(name, "AES_256") || strstr(name, "CHACHA20")) return 256;
+  if (strstr(name, "AES_192")) return 192;
+  if (strstr(name, "AES_128")) return 128;
+  return 0;
+}
+
+static ant_value_t tls_cert_to_object(ant_t *js, tlsuv_certificate_t cert, bool detailed, int depth) {
+  char buf[1024];
+  ant_value_t obj;
+
+  if (!cert || depth > 10) return Ant_Object_CreateBare(js);
+  obj = Ant_Object_CreateBare(js);
+
+  if (tlsuv_cert_get_subject(cert, buf, sizeof(buf)) == 0)
+    js_set(js, obj, "subject", js_mkstr(js, buf, strlen(buf)));
+  if (tlsuv_cert_get_issuer(cert, buf, sizeof(buf)) == 0)
+    js_set(js, obj, "issuer", js_mkstr(js, buf, strlen(buf)));
+  if (tlsuv_cert_get_serial(cert, buf, sizeof(buf)) == 0)
+    js_set(js, obj, "serialNumber", js_mkstr(js, buf, strlen(buf)));
+  if (tlsuv_cert_get_fingerprint_sha256(cert, buf, sizeof(buf)) == 0)
+    js_set(js, obj, "fingerprint256", js_mkstr(js, buf, strlen(buf)));
+
+  {
+    const unsigned char *der = NULL;
+    size_t der_len = 0;
+    if (tlsuv_cert_get_der(cert, &der, &der_len) == 0 && der && der_len > 0)
+      js_set(js, obj, "raw", tls_make_buffer_chunk(js, (const char *)der, der_len));
+  }
+
+  if (cert->get_expiration) {
+    struct tm expires;
+    memset(&expires, 0, sizeof(expires));
+    if (cert->get_expiration(cert, &expires) == 0) {
+      char date[64];
+      if (strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%SZ", &expires) > 0)
+        js_set(js, obj, "valid_to", js_mkstr(js, date, strlen(date)));
+    }
+  }
+
+  if (detailed) {
+    tlsuv_certificate_t next = NULL;
+    if (tlsuv_cert_get_next(cert, &next) == 0 && next) {
+      js_set(js, obj, "issuerCertificate", tls_cert_to_object(js, next, true, depth + 1));
+      if (next->free) next->free(next);
+    }
+  }
+  return obj;
+}
+
 static ant_value_t js_tls_socket_getProtocol(ant_params_t) {
   ant_tls_socket_t *socket = tls_require_socket(js, call_this);
-  const char *protocol = NULL;
+  const char *version = NULL;
   if (!socket) return Ant_Exception_Current(js);
   if (socket->destroyed || socket->closing) return Ant_Value_Null;
-  protocol = tlsuv_stream_get_protocol(&socket->stream);
-  return protocol && *protocol ? js_mkstr(js, protocol, strlen(protocol)) : Ant_Value_Undefined;
+  /* Node's getProtocol() is the negotiated TLS version; ALPN is exposed via
+   * the socket's alpnProtocol property and getALPNProtocols(). */
+  version = tlsuv_stream_get_version(&socket->stream);
+  return version && *version ? js_mkstr(js, version, strlen(version)) : Ant_Value_Undefined;
 }
 
 static ant_value_t js_tls_socket_getCipher(ant_params_t) {
-  return Ant_Value_Undefined;
+  ant_tls_socket_t *socket = tls_require_socket(js, call_this);
+  const char *name = NULL;
+  const char *version = NULL;
+  ant_value_t obj;
+
+  if (!socket) return Ant_Exception_Current(js);
+  if (socket->destroyed || socket->closing) return Ant_Value_Null;
+  name = tlsuv_stream_get_cipher_name(&socket->stream);
+  if (!name || !*name) return Ant_Value_Undefined;
+
+  obj = Ant_Object_CreateBare(js);
+  js_set(js, obj, "name", js_mkstr(js, name, strlen(name)));
+  version = tlsuv_stream_get_version(&socket->stream);
+  if (version && *version) js_set(js, obj, "version", js_mkstr(js, version, strlen(version)));
+  {
+    int bits = tls_cipher_bits(name);
+    if (bits > 0) js_set(js, obj, "bits", Ant_Value_FromNumber(bits));
+  }
+  return obj;
 }
 
 static ant_value_t js_tls_socket_getSession(ant_params_t) {
-  return Ant_Value_Undefined;
+  ant_tls_socket_t *socket = tls_require_socket(js, call_this);
+  unsigned char *session = NULL;
+  size_t len = 0;
+
+  if (!socket) return Ant_Exception_Current(js);
+  if (socket->destroyed || socket->closing) return Ant_Value_Null;
+  if (tlsuv_stream_get_session(&socket->stream, &session, &len) != 0 || !session || len == 0)
+    return Ant_Value_Undefined;
+
+  ant_value_t result = tls_make_buffer_chunk(js, (const char *)session, len);
+  tlsuv_free(session);
+  return result;
 }
 
 static ant_value_t js_tls_socket_getPeerCertificate(ant_params_t) {
-  return Ant_Object_CreateBare(js);
+  ant_tls_socket_t *socket = tls_require_socket(js, call_this);
+  tlsuv_certificate_t cert = NULL;
+  bool detailed = nargs > 0 && js_truthy(js, args[0]);
+
+  if (!socket) return Ant_Exception_Current(js);
+  if (socket->destroyed || socket->closing) return Ant_Value_Null;
+  if (tlsuv_stream_get_peer_cert(&socket->stream, &cert) != 0 || !cert)
+    return Ant_Value_Undefined;
+
+  ant_value_t result = tls_cert_to_object(js, cert, detailed, 0);
+  if (cert->free) cert->free(cert);
+  return result;
 }
 
 static ant_value_t js_tls_socket_renegotiate(ant_params_t) {
@@ -1190,7 +1327,8 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   socket->servername = strdup(servername ? servername : (host ? host : "localhost"));
   socket->port = port > 0 ? port : 443;
   socket->family = "IPv4";
-  socket->authorized = true;
+  socket->reject_unauthorized = true; /* fail closed unless explicitly disabled */
+  socket->authorized = false;
   socket->connecting = true;
   
   if (!socket->host || !socket->servername) {
@@ -1232,10 +1370,10 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   }
 
   value = js_get(js, options, "rejectUnauthorized");
-  if (vtype(value) != kTypeUndefined && !js_truthy(js, value)) {
+  socket->reject_unauthorized = vtype(value) == kTypeUndefined ? true : js_truthy(js, value);
+  if (!socket->reject_unauthorized) {
     socket->authorized = false;
-    if (socket->ctx && socket->ctx->set_cert_verify)
-      socket->ctx->set_cert_verify(socket->ctx, tls_accept_any_cert, NULL);
+    tls_socket_set_authorization_error(socket, "certificate verification disabled");
   }
 
   value = js_get(js, options, "ALPNProtocols");
@@ -1251,7 +1389,11 @@ static ant_value_t js_tls_connect_options(ant_t *js, ant_value_t options, ant_va
   tlsuv_stream_init(js->loop, &socket->stream, socket->ctx);
   socket->stream.data = socket;
   socket->connect_req.data = socket;
-  
+
+  /* Per-connection verification override: never mutate the shared context. */
+  if (!socket->reject_unauthorized)
+    tlsuv_stream_set_cert_verify(&socket->stream, tls_accept_any_cert, socket);
+
   if (socket->alpn_count > 0)
     tlsuv_stream_set_protocols(&socket->stream, socket->alpn_count, (const char **)socket->alpn_protocols);
 
@@ -1339,7 +1481,8 @@ static tlsuv_stream_t *tls_server_on_accept(tlsuv_listener_t *l, const struct so
   
   socket->ctx = server->ctx_wrap->ctx;
   socket->ctx_wrap = server->ctx_wrap;
-  socket->authorized = server->request_cert;
+  socket->reject_unauthorized = true; /* requestCert always verifies */
+  socket->authorized = false;
   socket->connecting = true;
   socket->server = server;
   
@@ -1378,6 +1521,7 @@ static void tls_server_on_handshake(tlsuv_stream_t *clt, int status) {
   if (protocol && *protocol)
     js_set(js, socket->obj, "alpnProtocol", js_mkstr(js, protocol, strlen(protocol)));
 
+  tls_socket_update_authorization(socket, server ? server->request_cert : false);
   tlsuv_stream_read_start(&socket->stream, tls_alloc_cb, tls_socket_on_read);
   tls_socket_sync_state(socket);
   eventemitter_emit_args(js, socket->obj, "secure", NULL, 0);

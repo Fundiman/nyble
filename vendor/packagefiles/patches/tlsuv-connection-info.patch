@@ -1,0 +1,538 @@
+diff --git a/include/tlsuv/tls_engine.h b/include/tlsuv/tls_engine.h
+index 6784a2e..10aca9c 100644
+--- a/include/tlsuv/tls_engine.h
++++ b/include/tlsuv/tls_engine.h
+@@ -15,6 +15,7 @@
+ #ifndef TLSUV_ENGINE_H
+ #define TLSUV_ENGINE_H
+ 
++#include <stdint.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <time.h>
+@@ -202,6 +203,26 @@ struct tlsuv_engine_s {
+      * Optional: NULL for engines that do all their work inside the engine calls.
+      */
+     void (*setup_async)(tlsuv_engine_t self, void(*async_cb)(void *ctx, size_t in, size_t out), void *ctx);
++
++    /* Optional connection inspection and verification APIs. Backends that do
++     * not support one of these leave it NULL; callers must fail closed. */
++    const char* (*get_version)(tlsuv_engine_t self);
++    const char* (*get_cipher_name)(tlsuv_engine_t self);
++    int (*get_cipher_id)(tlsuv_engine_t self);
++
++    /* Serialized session. On success *out is owned by the caller and must be
++     * released with tlsuv_free(). Returns TLS_ERR if unavailable. */
++    int (*get_session)(tlsuv_engine_t self, unsigned char **out, size_t *out_len);
++
++    /* Verification flags observed before an application verify callback is
++     * allowed to override them. Returns TLS_ERR if unavailable. */
++    int (*get_verify_result)(tlsuv_engine_t self, uint32_t *flags);
++
++    /* Per-engine certificate verification override. Unlike
++     * tls_context.set_cert_verify this does not mutate shared context state. */
++    int (*set_cert_verify)(tlsuv_engine_t self,
++                           int (*verify_f)(const struct tlsuv_certificate_s *cert, void *ctx),
++                           void *ctx);
+ };
+ 
+ typedef struct tls_context_s tls_context;
+@@ -214,7 +235,13 @@ typedef struct tlsuv_private_key_s *tlsuv_private_key_t;
+     int (*get_expiration)(const struct tlsuv_certificate_s * cert, struct tm *);          \
+     const char* (*get_text)(const struct tlsuv_certificate_s * cert);                     \
+     int (*verify)(const struct tlsuv_certificate_s * cert, enum hash_algo md,             \
+-                  const char *data, size_t datalen, const char *sig, size_t siglen);
++                  const char *data, size_t datalen, const char *sig, size_t siglen);     \
++    int (*get_der)(const struct tlsuv_certificate_s * cert, const unsigned char **der, size_t *len); \
++    int (*get_subject)(const struct tlsuv_certificate_s * cert, char *buf, size_t len);   \
++    int (*get_issuer)(const struct tlsuv_certificate_s * cert, char *buf, size_t len);    \
++    int (*get_serial)(const struct tlsuv_certificate_s * cert, char *buf, size_t len);    \
++    int (*get_fingerprint_sha256)(const struct tlsuv_certificate_s * cert, char *buf, size_t len); \
++    int (*get_next)(const struct tlsuv_certificate_s * cert, tlsuv_certificate_t *next);
+ 
+ #define TLSUV_PUBKEY_API                                                           \
+     void (*free)(struct tlsuv_public_key_s * pubkey);                              \
+diff --git a/include/tlsuv/tlsuv.h b/include/tlsuv/tlsuv.h
+index f8929e3..006451d 100644
+--- a/include/tlsuv/tlsuv.h
++++ b/include/tlsuv/tlsuv.h
+@@ -50,6 +50,9 @@ void tlsuv_set_allocator(uv_malloc_func malloc_f,
+                          uv_calloc_func calloc_f,
+                          uv_free_func free_f);
+ 
++/* Release memory returned by tlsuv_stream_get_session(). */
++void tlsuv_free(void *ptr);
++
+ typedef struct tlsuv_stream_s tlsuv_stream_t;
+ 
+ struct tlsuv_hs;
+@@ -65,7 +68,28 @@ int tlsuv_stream_init(uv_loop_t *l, tlsuv_stream_t *clt, tls_context *tls);
+ void tlsuv_stream_set_connector(tlsuv_stream_t *clt, const tlsuv_connector_t *connector);
+ 
+ int tlsuv_stream_set_protocols(tlsuv_stream_t *clt, int num, const char *protocols[]);
+-const char* tlsuv_stream_get_protocol(tlsuv_stream_t *clt);
++const char* tlsuv_stream_get_protocol(tlsuv_stream_t *clt); /* ALPN */
++
++/* Negotiated TLS connection details. All are optional: unsupported backends
++ * return NULL/TLS_ERR and callers must fail closed. */
++const char *tlsuv_stream_get_version(tlsuv_stream_t *clt);
++const char *tlsuv_stream_get_cipher_name(tlsuv_stream_t *clt);
++int tlsuv_stream_get_cipher_id(tlsuv_stream_t *clt);
++int tlsuv_stream_get_session(tlsuv_stream_t *clt, unsigned char **out, size_t *out_len);
++int tlsuv_stream_get_verify_result(tlsuv_stream_t *clt, uint32_t *flags);
++int tlsuv_stream_get_peer_cert(tlsuv_stream_t *clt, tlsuv_certificate_t *cert);
++int tlsuv_stream_set_cert_verify(tlsuv_stream_t *clt,
++                                 int (*verify_f)(const struct tlsuv_certificate_s *cert, void *ctx),
++                                 void *ctx);
++
++/* Certificate inspectors. Strings are NUL-terminated into caller buffers. */
++int tlsuv_cert_get_der(tlsuv_certificate_t cert, const unsigned char **der, size_t *len);
++int tlsuv_cert_get_subject(tlsuv_certificate_t cert, char *buf, size_t len);
++int tlsuv_cert_get_issuer(tlsuv_certificate_t cert, char *buf, size_t len);
++int tlsuv_cert_get_serial(tlsuv_certificate_t cert, char *buf, size_t len);
++int tlsuv_cert_get_fingerprint_sha256(tlsuv_certificate_t cert, char *buf, size_t len);
++int tlsuv_cert_get_next(tlsuv_certificate_t cert, tlsuv_certificate_t *next);
++
+ int tlsuv_stream_keepalive(tlsuv_stream_t *clt, int keepalive, unsigned int delay);
+ int tlsuv_stream_nodelay(tlsuv_stream_t *clt, int nodelay);
+ 
+@@ -182,6 +206,10 @@ struct tlsuv_stream_s {
+     tls_context *tls;
+     tlsuv_engine_t tls_engine;
+ 
++    /* Per-connection verification override; applied when the engine is built. */
++    int (*cert_verify_f)(const struct tlsuv_certificate_s *cert, void *ctx);
++    void *cert_verify_ctx;
++
+     int alpn_count;
+     const char **alpn_protocols;
+ 
+diff --git a/src/mbedtls/engine.c b/src/mbedtls/engine.c
+index 77412fb..81b8dac 100644
+--- a/src/mbedtls/engine.c
++++ b/src/mbedtls/engine.c
+@@ -16,6 +16,7 @@
+ #include <assert.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
++#include <stdio.h>
+ #include <string.h>
+ #include <stdarg.h>
+ #include <mbedtls/x509_csr.h>
+@@ -105,6 +106,11 @@ struct mbedtls_engine {
+     void *verify_ctx;
+     mbedtls_ctr_drbg_context *drbg;
+     mbedtls_entropy_context *entropy;
++
++    /* Deep copy of the peer chain, captured during the handshake because
++     * mbedtls_ssl_get_peer_cert() only borrows memory owned by the SSL context. */
++    mbedtls_x509_crt *peer_chain;
++    uint32_t verify_flags; /* observed flags, before any verify callback override */
+ };
+ 
+ static void mbedtls_set_alpn_protocols(tlsuv_engine_t engine, const char** protos, int len);
+@@ -163,6 +169,24 @@ static int generate_csr(tlsuv_private_key_t key, char **pem, size_t *pemlen, ...
+ static int mbedtls_load_cert(tlsuv_certificate_t *c, const char *cert_buf, size_t cert_len);
+ static int cert_expiration(const struct tlsuv_certificate_s *cert, struct tm *time);
+ 
++static const char *mbedtls_get_version(tlsuv_engine_t self);
++static const char *mbedtls_get_cipher_name(tlsuv_engine_t self);
++static int mbedtls_get_cipher_id(tlsuv_engine_t self);
++static int mbedtls_get_session(tlsuv_engine_t self, unsigned char **out, size_t *out_len);
++static int mbedtls_get_verify_result(tlsuv_engine_t self, uint32_t *flags);
++static int mbedtls_engine_set_cert_verify(tlsuv_engine_t self,
++                                          int (*verify_f)(const struct tlsuv_certificate_s *cert, void *ctx),
++                                          void *ctx);
++static int mbedtls_get_peer_cert(tlsuv_engine_t self, tlsuv_certificate_t *cert);
++static void mbedtls_free_borrowed_cert(tlsuv_certificate_t cert);
++
++static int mbedtls_cert_get_der(const struct tlsuv_certificate_s *cert, const unsigned char **der, size_t *len);
++static int mbedtls_cert_get_subject(const struct tlsuv_certificate_s *cert, char *buf, size_t len);
++static int mbedtls_cert_get_issuer(const struct tlsuv_certificate_s *cert, char *buf, size_t len);
++static int mbedtls_cert_get_serial(const struct tlsuv_certificate_s *cert, char *buf, size_t len);
++static int mbedtls_cert_get_fingerprint_sha256(const struct tlsuv_certificate_s *cert, char *buf, size_t len);
++static int mbedtls_cert_get_next(const struct tlsuv_certificate_s *cert, tlsuv_certificate_t *next);
++
+ struct cert_s {
+     TLSUV_CERT_API
+     mbedtls_x509_crt *chain;
+@@ -173,6 +197,12 @@ static struct cert_s cert_api = {
+     .to_pem = write_cert_pem,
+     .verify = mbedtls_verify_signature,
+     .get_expiration = cert_expiration,
++    .get_der = mbedtls_cert_get_der,
++    .get_subject = mbedtls_cert_get_subject,
++    .get_issuer = mbedtls_cert_get_issuer,
++    .get_serial = mbedtls_cert_get_serial,
++    .get_fingerprint_sha256 = mbedtls_cert_get_fingerprint_sha256,
++    .get_next = mbedtls_cert_get_next,
+ };
+ 
+ static tls_context mbedtls_context_api = {
+@@ -208,6 +238,13 @@ static struct tlsuv_engine_s mbedtls_engine_api = {
+         .reset = mbedtls_reset,
+         .strerror = mbedtls_eng_error,
+         .free = mbedtls_free,
++        .get_version = mbedtls_get_version,
++        .get_cipher_name = mbedtls_get_cipher_name,
++        .get_cipher_id = mbedtls_get_cipher_id,
++        .get_session = mbedtls_get_session,
++        .get_verify_result = mbedtls_get_verify_result,
++        .set_cert_verify = mbedtls_engine_set_cert_verify,
++        .get_peer_cert = mbedtls_get_peer_cert,
+ };
+ 
+ static void init_ssl_context(mbedtls_ssl_config *ssl_config, const char *ca, size_t cabuf_len);
+@@ -390,19 +427,17 @@ static void init_ssl_context(mbedtls_ssl_config *ssl_config, const char *cabuf,
+         }
+     } else { // try loading default CA stores
+ #if _WIN32
+-        HCERTSTORE       hCertStore;
+-        PCCERT_CONTEXT   pCertContext = NULL;
+-
+-        if (!(hCertStore = CertOpenSystemStore(0, "ROOT")))
+-        {
+-            printf("The first system store did not open.");
+-            return;
+-        }
+-        while (pCertContext = CertEnumCertificatesInStore(hCertStore, pCertContext)) {
+-            mbedtls_x509_crt_parse(engine->ca, pCertContext->pbCertEncoded, pCertContext->cbCertEncoded);
++        static const char *const stores[] = { "ROOT", "CA", "AuthRoot" };
++        for (size_t si = 0; si < sizeof(stores)/sizeof(stores[0]); si++) {
++            HCERTSTORE hCertStore = CertOpenSystemStoreA(0, stores[si]);
++            PCCERT_CONTEXT pCertContext = NULL;
++            if (!hCertStore) continue;
++            while ((pCertContext = CertEnumCertificatesInStore(hCertStore, pCertContext)) != NULL) {
++                mbedtls_x509_crt_parse(engine->ca, pCertContext->pbCertEncoded, pCertContext->cbCertEncoded);
++            }
++            CertFreeCertificateContext(pCertContext);
++            CertCloseStore(hCertStore, 0);
+         }
+-        CertFreeCertificateContext(pCertContext);
+-        CertCloseStore(hCertStore, 0);
+ #else
+         const char* sys_bundle = NULL;
+         for (size_t i = 0; i < NUM_CAFILES; i++) {
+@@ -424,9 +459,188 @@ static void init_ssl_context(mbedtls_ssl_config *ssl_config, const char *cabuf,
+     tlsuv__free(seed);
+ }
+ 
++static bool mbedtls_hs_complete(const struct mbedtls_engine *e) {
++    return e && e->ssl && mbedtls_ssl_is_handshake_over(e->ssl) == 1;
++}
++
++static const char *mbedtls_get_version(tlsuv_engine_t self) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!mbedtls_hs_complete(e)) return NULL;
++    return mbedtls_ssl_get_version(e->ssl);
++}
++
++static const char *mbedtls_get_cipher_name(tlsuv_engine_t self) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!mbedtls_hs_complete(e)) return NULL;
++    return mbedtls_ssl_get_ciphersuite(e->ssl);
++}
++
++static int mbedtls_get_cipher_id(tlsuv_engine_t self) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!mbedtls_hs_complete(e)) return TLS_ERR;
++    return mbedtls_ssl_get_ciphersuite_id_from_ssl(e->ssl);
++}
++
++static int mbedtls_get_session(tlsuv_engine_t self, unsigned char **out, size_t *out_len) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!out || !out_len || !mbedtls_hs_complete(e)) return TLS_ERR;
++
++    mbedtls_ssl_session *session = tlsuv__calloc(1, sizeof(*session));
++    if (!session) return TLS_ERR;
++    mbedtls_ssl_session_init(session);
++
++    int rc = mbedtls_ssl_get_session(e->ssl, session);
++    size_t len = 0;
++    if (rc == 0) {
++        /* A NULL/0 probe reports the required size as BUFFER_TOO_SMALL. */
++        rc = mbedtls_ssl_session_save(session, NULL, 0, &len);
++        if (rc == MBEDTLS_ERR_SSL_BUFFER_TOO_SMALL) rc = 0;
++    }
++    if (rc == 0 && len > 0) {
++        *out = tlsuv__malloc(len);
++        if (*out) {
++            rc = mbedtls_ssl_session_save(session, *out, len, out_len);
++            if (rc == 0) {
++                mbedtls_ssl_session_free(session);
++                tlsuv__free(session);
++                return TLS_OK;
++            }
++            tlsuv__free(*out);
++            *out = NULL;
++        }
++    }
++    mbedtls_ssl_session_free(session);
++    tlsuv__free(session);
++    *out_len = 0;
++    return TLS_ERR;
++}
++
++static int mbedtls_get_verify_result(tlsuv_engine_t self, uint32_t *flags) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!flags || !e) return TLS_ERR;
++    *flags = e->verify_flags;
++    return TLS_OK;
++}
++
++static int mbedtls_engine_set_cert_verify(tlsuv_engine_t self,
++                                          int (*verify_f)(const struct tlsuv_certificate_s *cert, void *ctx),
++                                          void *ctx) {
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!e) return TLS_ERR;
++    e->cert_verify_f = verify_f;
++    e->verify_ctx = ctx;
++    return TLS_OK;
++}
++
++static void mbedtls_free_borrowed_cert(tlsuv_certificate_t cert) {
++    /* chain is owned by the engine; only the wrapper belongs to the caller */
++    tlsuv__free(cert);
++}
++
++static int mbedtls_cert_get_der(const struct tlsuv_certificate_s *cert, const unsigned char **der, size_t *len) {
++    if (!cert || !der || !len) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain) return TLS_ERR;
++    *der = c->chain->raw.p;
++    *len = c->chain->raw.len;
++    return TLS_OK;
++}
++
++static int mbedtls_cert_get_subject(const struct tlsuv_certificate_s *cert, char *buf, size_t len) {
++    if (!cert || !buf || len == 0) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain || mbedtls_x509_dn_gets(buf, len, &c->chain->subject) < 0) return TLS_ERR;
++    return TLS_OK;
++}
++
++static int mbedtls_cert_get_issuer(const struct tlsuv_certificate_s *cert, char *buf, size_t len) {
++    if (!cert || !buf || len == 0) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain || mbedtls_x509_dn_gets(buf, len, &c->chain->issuer) < 0) return TLS_ERR;
++    return TLS_OK;
++}
++
++static int mbedtls_cert_get_serial(const struct tlsuv_certificate_s *cert, char *buf, size_t len) {
++    if (!cert || !buf || len == 0) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain || mbedtls_x509_serial_gets(buf, len, &c->chain->serial) < 0) return TLS_ERR;
++    return TLS_OK;
++}
++
++static int mbedtls_cert_get_fingerprint_sha256(const struct tlsuv_certificate_s *cert, char *buf, size_t len) {
++    unsigned char digest[32];
++    if (!cert || !buf || len < sizeof(digest) * 2 + 1) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain || !c->chain->raw.p) return TLS_ERR;
++
++    const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
++    if (!md || mbedtls_md(md, c->chain->raw.p, c->chain->raw.len, digest) != 0) return TLS_ERR;
++
++    static const char hex[] = "0123456789abcdef";
++    for (size_t i = 0; i < sizeof(digest); i++) {
++        buf[i * 2] = hex[digest[i] >> 4];
++        buf[i * 2 + 1] = hex[digest[i] & 0x0f];
++    }
++    buf[sizeof(digest) * 2] = 0;
++    return TLS_OK;
++}
++
++static int mbedtls_cert_get_next(const struct tlsuv_certificate_s *cert, tlsuv_certificate_t *next) {
++    if (next) *next = NULL;
++    if (!cert || !next) return TLS_ERR;
++    struct cert_s *c = (struct cert_s *)cert;
++    if (!c->chain || !c->chain->next) return TLS_ERR;
++
++    struct cert_s *n = tlsuv__calloc(1, sizeof(*n));
++    if (!n) return TLS_ERR;
++    *n = cert_api;
++    n->free = mbedtls_free_borrowed_cert; /* borrowed chain, owned by the engine */
++    n->chain = c->chain->next;
++    *next = (tlsuv_certificate_t)n;
++    return TLS_OK;
++}
++
++static int mbedtls_get_peer_cert(tlsuv_engine_t self, tlsuv_certificate_t *cert) {
++    if (cert) *cert = NULL;
++    if (!cert || !mbedtls_hs_complete((struct mbedtls_engine *)self)) return TLS_ERR;
++    struct mbedtls_engine *e = (struct mbedtls_engine *)self;
++    if (!e->peer_chain) return TLS_ERR;
++
++    struct cert_s *c = tlsuv__calloc(1, sizeof(*c));
++    if (!c) return TLS_ERR;
++    *c = cert_api;
++    c->free = mbedtls_free_borrowed_cert;
++    c->chain = e->peer_chain;
++    *cert = (tlsuv_certificate_t)c;
++    return TLS_OK;
++}
++
+ static int internal_cert_verify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags) {
+     struct mbedtls_engine *eng = ctx;
+ 
++    eng->verify_flags |= *flags;
++
++    /* Capture the peer chain while mbedTLS still owns it: the pointer from
++     * mbedtls_ssl_get_peer_cert() is only borrowed until the next SSL call. */
++    if (depth == 0 && !eng->peer_chain) {
++        mbedtls_x509_crt *copy = tlsuv__calloc(1, sizeof(*copy));
++        if (copy) {
++            mbedtls_x509_crt_init(copy);
++            const mbedtls_x509_crt *src = crt;
++            int copied = 0;
++            while (src) {
++                if (!src->raw.p || mbedtls_x509_crt_parse_der(copy, src->raw.p, src->raw.len) != 0) break;
++                copied++;
++                src = src->next;
++            }
++            if (copied > 0) eng->peer_chain = copy;
++            else {
++                mbedtls_x509_crt_free(copy);
++                tlsuv__free(copy);
++            }
++        }
++    }
++
+     // mbedTLS does not verify IP address SANs, here we patch the result if we find a match
+     if (depth == 0 && eng->ip_len > 0 && (*flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) != 0) {
+         const mbedtls_x509_sequence *cur;
+@@ -639,6 +853,12 @@ static void mbedtls_free_ctx(tls_context *ctx) {
+ 
+ static int mbedtls_reset(tlsuv_engine_t engine) {
+     struct mbedtls_engine *e = (struct mbedtls_engine *)engine;
++    if (e->peer_chain) {
++        mbedtls_x509_crt_free(e->peer_chain);
++        tlsuv__free(e->peer_chain);
++        e->peer_chain = NULL;
++    }
++    e->verify_flags = 0;
+     if (e->session == NULL) {
+         e->session = tlsuv__calloc(1, sizeof(mbedtls_ssl_session));
+     }
+@@ -666,6 +886,10 @@ static void mbedtls_free(tlsuv_engine_t engine) {
+         mbedtls_ssl_session_free(e->session);
+         tlsuv__free(e->session);
+     }
++    if (e->peer_chain) {
++        mbedtls_x509_crt_free(e->peer_chain);
++        tlsuv__free(e->peer_chain);
++    }
+ 
+     if (e->protocols) {
+         for (int i = 0; e->protocols[i] != NULL; i++) {
+diff --git a/src/tlsuv.c b/src/tlsuv.c
+index 0cca4a7..f585579 100644
+--- a/src/tlsuv.c
++++ b/src/tlsuv.c
+@@ -299,6 +299,94 @@ const char* tlsuv_stream_get_protocol(tlsuv_stream_t *clt) {
+     return NULL;
+ }
+ 
++void tlsuv_free(void *ptr) {
++    tlsuv__free(ptr);
++}
++
++const char *tlsuv_stream_get_version(tlsuv_stream_t *clt) {
++    if (clt && clt->tls_engine && clt->tls_engine->get_version)
++        return clt->tls_engine->get_version(clt->tls_engine);
++    return NULL;
++}
++
++const char *tlsuv_stream_get_cipher_name(tlsuv_stream_t *clt) {
++    if (clt && clt->tls_engine && clt->tls_engine->get_cipher_name)
++        return clt->tls_engine->get_cipher_name(clt->tls_engine);
++    return NULL;
++}
++
++int tlsuv_stream_get_cipher_id(tlsuv_stream_t *clt) {
++    if (clt && clt->tls_engine && clt->tls_engine->get_cipher_id)
++        return clt->tls_engine->get_cipher_id(clt->tls_engine);
++    return TLS_ERR;
++}
++
++int tlsuv_stream_get_session(tlsuv_stream_t *clt, unsigned char **out, size_t *out_len) {
++    if (out) *out = NULL;
++    if (out_len) *out_len = 0;
++    if (!out || !out_len || !clt || !clt->tls_engine || !clt->tls_engine->get_session)
++        return TLS_ERR;
++    return clt->tls_engine->get_session(clt->tls_engine, out, out_len);
++}
++
++int tlsuv_stream_get_verify_result(tlsuv_stream_t *clt, uint32_t *flags) {
++    if (flags) *flags = 0;
++    if (!flags || !clt || !clt->tls_engine || !clt->tls_engine->get_verify_result)
++        return TLS_ERR;
++    return clt->tls_engine->get_verify_result(clt->tls_engine, flags);
++}
++
++int tlsuv_stream_set_cert_verify(tlsuv_stream_t *clt,
++                                 int (*verify_f)(const struct tlsuv_certificate_s *cert, void *ctx),
++                                 void *ctx) {
++    if (!clt) return TLS_ERR;
++    clt->cert_verify_f = verify_f;
++    clt->cert_verify_ctx = ctx;
++    if (clt->tls_engine && clt->tls_engine->set_cert_verify)
++        return clt->tls_engine->set_cert_verify(clt->tls_engine, verify_f, ctx);
++    return TLS_OK; /* applied when the engine is created */
++}
++
++int tlsuv_stream_get_peer_cert(tlsuv_stream_t *clt, tlsuv_certificate_t *cert) {
++    if (cert) *cert = NULL;
++    if (!cert || !clt || !clt->tls_engine || !clt->tls_engine->get_peer_cert)
++        return TLS_ERR;
++    return clt->tls_engine->get_peer_cert(clt->tls_engine, cert);
++}
++
++int tlsuv_cert_get_der(tlsuv_certificate_t cert, const unsigned char **der, size_t *len) {
++    if (der) *der = NULL;
++    if (len) *len = 0;
++    if (!cert || !cert->get_der || !der || !len) return TLS_ERR;
++    return cert->get_der(cert, der, len);
++}
++
++int tlsuv_cert_get_subject(tlsuv_certificate_t cert, char *buf, size_t len) {
++    if (!cert || !cert->get_subject || !buf || len == 0) return TLS_ERR;
++    return cert->get_subject(cert, buf, len);
++}
++
++int tlsuv_cert_get_issuer(tlsuv_certificate_t cert, char *buf, size_t len) {
++    if (!cert || !cert->get_issuer || !buf || len == 0) return TLS_ERR;
++    return cert->get_issuer(cert, buf, len);
++}
++
++int tlsuv_cert_get_serial(tlsuv_certificate_t cert, char *buf, size_t len) {
++    if (!cert || !cert->get_serial || !buf || len == 0) return TLS_ERR;
++    return cert->get_serial(cert, buf, len);
++}
++
++int tlsuv_cert_get_fingerprint_sha256(tlsuv_certificate_t cert, char *buf, size_t len) {
++    if (!cert || !cert->get_fingerprint_sha256 || !buf || len == 0) return TLS_ERR;
++    return cert->get_fingerprint_sha256(cert, buf, len);
++}
++
++int tlsuv_cert_get_next(tlsuv_certificate_t cert, tlsuv_certificate_t *next) {
++    if (next) *next = NULL;
++    if (!cert || !cert->get_next || !next) return TLS_ERR;
++    return cert->get_next(cert, next);
++}
++
+ int tlsuv_stream_set_hostname(tlsuv_stream_t *clt, const char *host) {
+     tlsuv__free (clt->host);
+     clt->host = tlsuv__strdup(host);
+@@ -396,6 +484,10 @@ static void process_connect(tlsuv_stream_t *clt, int status) {
+         if (clt->alpn_protocols) {
+             clt->tls_engine->set_protocols(clt->tls_engine, clt->alpn_protocols, clt->alpn_count);
+         }
++        /* Per-connection verification override: never mutate the shared context. */
++        if (clt->cert_verify_f && clt->tls_engine->set_cert_verify) {
++            clt->tls_engine->set_cert_verify(clt->tls_engine, clt->cert_verify_f, clt->cert_verify_ctx);
++        }
+         clt->tls_engine->set_io_fd(clt->tls_engine, (tlsuv_sock_t) clt->sock);
+ 
+         if (clt->tls_engine->setup_async) {
