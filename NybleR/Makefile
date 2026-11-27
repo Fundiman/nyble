@@ -43,7 +43,7 @@ TINT_STAMP := $(STAMP_DIR)/tint.stamp
 MESA_STAMP := $(STAMP_DIR)/mesa.stamp
 NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 
-MESA_ARGS ?= -Dllvm=enabled -Dgallium-drivers=swrast -Dvulkan-drivers=swrast -Dosmesa=enabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled
+MESA_ARGS ?= -Dllvm=enabled -Dgallium-drivers=llvmpipe -Dvulkan-drivers=swrast -Degl=enabled -Dgles1=disabled -Dgles2=enabled
 
 DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
