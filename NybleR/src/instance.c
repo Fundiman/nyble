@@ -1,49 +1,15 @@
-#include "nybler/nybler.h"
+#include "internal.h"
 
 #include "shader_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-struct NyblerInstance {
-  NyblerBackend backend;
-  int headless;
-  char *preferred_adapter;
-};
-
-struct NyblerAdapter {
-  NyblerInstance *instance;
-};
-
-struct NyblerDevice {
-  NyblerAdapter *adapter;
-};
-
-struct NyblerShaderModule {
-  NyblerDevice *device;
-  NyblerShaderFormat format;
-  uint8_t *code;
-  size_t code_size;
-  char *label;
-};
-
-static char *nybler_duplicate_string(const char *value, size_t length) {
-  char *copy;
-
-  if (!value) return NULL;
-  copy = (char *)malloc(length + 1);
-  if (!copy) return NULL;
-  memcpy(copy, value, length);
-  copy[length] = '\0';
-  return copy;
-}
-
 NyblerResult nybler_init(
   const NyblerInitOptions *options,
   NyblerInstance **out_instance
 ) {
   NyblerInstance *instance;
-  size_t name_length = 0;
 
   if (!options || !out_instance) return NYBLER_ERROR_INVALID_ARGUMENT;
   *out_instance = NULL;
@@ -61,9 +27,8 @@ NyblerResult nybler_init(
   instance->headless = options->headless ? 1 : 0;
 
   if (options->preferred_adapter) {
-    name_length = strlen(options->preferred_adapter);
     instance->preferred_adapter =
-      nybler_duplicate_string(options->preferred_adapter, name_length);
+      nybler_internal_duplicate_string(options->preferred_adapter);
     if (!instance->preferred_adapter) {
       free(instance);
       return NYBLER_ERROR_OUT_OF_MEMORY;
@@ -114,11 +79,21 @@ NyblerResult nybler_adapter_request_device(
   device = (NyblerDevice *)calloc(1, sizeof(*device));
   if (!device) return NYBLER_ERROR_OUT_OF_MEMORY;
   device->adapter = adapter;
+
+  device->queue = (NyblerQueue *)calloc(1, sizeof(*device->queue));
+  if (!device->queue) {
+    free(device);
+    return NYBLER_ERROR_OUT_OF_MEMORY;
+  }
+  device->queue->device = device;
+
   *out_device = device;
   return NYBLER_OK;
 }
 
 void nybler_device_release(NyblerDevice *device) {
+  if (!device) return;
+  free(device->queue);
   free(device);
 }
 
@@ -175,7 +150,7 @@ NyblerResult nybler_shader_module_create(
   if (result != NYBLER_OK) return result;
 
   if (label) {
-    label_copy = nybler_duplicate_string(label, strlen(label));
+    label_copy = nybler_internal_duplicate_string(label);
     if (!label_copy) {
       nybler_shader_code_release(compiled);
       return NYBLER_ERROR_OUT_OF_MEMORY;

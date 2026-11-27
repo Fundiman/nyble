@@ -6,6 +6,7 @@ set(NYBLER_SOURCES
   src/document.c
   src/layout.c
   src/instance.c
+  src/resources.c
   src/shader_bridge.cpp
   src/version.c
 )

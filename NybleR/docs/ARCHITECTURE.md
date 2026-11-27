@@ -44,6 +44,12 @@ inline-style-driven block boxes and text runs, and produces borrowed
 display-list items. Display lists own copies of their text so they can outlive a
 layout object; layouts borrow their source document.
 
+`src/resources.c` implements the WebGPU-style object graph. Devices borrow
+adapters, resources and queues borrow devices, render pass encoders borrow their
+command encoder, and command buffers are consumed by `nybler_queue_submit()`.
+Command buffers currently record validated render-pass commands; Mesa-backed
+execution is wired in as the local software renderer is integrated.
+
 Dawn, SDL3 GPU, and raylib are not the public API. They are possible future
 implementation details behind this surface.
 

@@ -60,7 +60,8 @@ Targets:
 - `dom-smoke` — public `nybler_*` DOM API smoke test: `<h1> hello world </h1>` → `hello world`
 - `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
 - `shader-smoke` — instance/adapter/device lifecycle and full WGSL → SPIR-V/GLSL compile smoke test
-- `check` — run all three smoke tests
+- `resources-smoke` — buffers, textures, samplers, bind groups, pipelines, render passes, command buffers, and queue submission smoke test
+- `check` — run all four smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -72,8 +73,9 @@ with, for example, `make -C NybleR tint NYBLER_JOBS=1`.
 
 The default Windows Mesa configuration uses `softpipe` with Vulkan disabled
 until a local `llvm-config` is available; llvmpipe and lavapipe remain the
-intended performance paths. It also forces Meson's optimization level to `-O1`
-because Mesa's generated `api_trace.c` makes clang exhaust memory at `-O3`.
+intended performance paths. It uses Meson's `plain` build type because the
+`release` preset overwrites `-Doptimization` with `-O3`, and Mesa's generated
+`api_trace.c` makes clang exhaust memory at that level. `MESA_BUILDTYPE` and
 `MESA_ARGS` can be overridden to enable LLVM drivers or a different
 optimization level when the local toolchain has enough memory.
 

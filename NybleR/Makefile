@@ -88,18 +88,21 @@ NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 WINFLEXBISON_VERSION ?= 2.5.25
 WINFLEXBISON_URL ?= https://github.com/lexxmark/winflexbison/releases/download/v$(WINFLEXBISON_VERSION)/win_flex_bison-$(WINFLEXBISON_VERSION).zip
 
-# Meson's release preset uses -O3, which makes clang run out of memory on
-# Mesa's generated glapi trace file. -O1 keeps the local software build
-# reproducible on memory-constrained machines.
-MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Degl=enabled -Dgles1=disabled -Dgles2=enabled -Doptimization=1
+# Meson's release preset overwrites -Doptimization with -O3 even when the
+# option is passed on the command line. Use the plain preset so MESA_ARGS can
+# actually choose the optimization level for this local software build.
+MESA_BUILDTYPE ?= plain
+MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Degl=enabled -Dgles1=disabled -Dgles2=enabled -Doptimization=0
 
 DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 LAYOUT_SMOKE_BIN := $(CURDIR)/$(BUILD)/layout-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 SHADER_SMOKE_BIN := $(CURDIR)/$(BUILD)/shader-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+RESOURCES_SMOKE_BIN := $(CURDIR)/$(BUILD)/resources-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.obj
+RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.obj
 LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
 NYBLER_LIB ?= $(NYBLER_BUILD)/nybler.lib
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/tint*.lib)
@@ -112,6 +115,7 @@ else
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.o
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.o
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.o
+RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.o
 LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
 NYBLER_LIB ?= $(NYBLER_BUILD)/libnybler.a
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/libtint*.a)
@@ -120,7 +124,7 @@ NYBLER_CXX_LINK_FLAGS ?=
 NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke resources-smoke check clean
 
 all: deps nybler
 
@@ -222,7 +226,7 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(PY_WRAPPERS)
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) setup $(MESA_BUILD) $(MESA_SRC) \
 		--prefix=$(PREFIX) \
-		--buildtype=release \
+		--buildtype=$(MESA_BUILDTYPE) \
 		$(MESA_ARGS)
 	$(if $(filter Windows_NT,$(OS)),$(POWERSHELL) -NoProfile -Command '(Get-Item "$(MESA_BUILD)/meson-private/coredata.dat").LastWriteTime = (Get-Date).AddSeconds(-2)',)
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
@@ -273,7 +277,17 @@ shader-smoke: nybler lexbor
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
 	$(SHADER_SMOKE_BIN)
 
-check: nybler dom-smoke layout-smoke shader-smoke
+resources-smoke: nybler lexbor
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 \
+		-I$(CURDIR)/include \
+		-c -o $(RESOURCES_SMOKE_OBJ) $(CURDIR)/tests/resources_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(RESOURCES_SMOKE_BIN) $(RESOURCES_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+	$(RESOURCES_SMOKE_BIN)
+
+check: nybler dom-smoke layout-smoke shader-smoke resources-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:
