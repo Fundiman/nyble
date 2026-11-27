@@ -26,7 +26,7 @@ built locally from source submodules:
 | Path | Project | Role |
 | --- | --- | --- |
 | `third_party/lexbor` | Lexbor | HTML5, DOM, CSS, selectors, URL, encoding |
-| `third_party/tint` | Tint | Full WGSL parsing/validation and SPIR-V/GLSL/MSL/HLSL output |
+| `third_party/tint` | Tint | Full WGSL parsing/validation and SPIR-V/GLSL/MSL output |
 | `third_party/mesa` | Mesa | OpenGL/EGL and Vulkan software/hardware rendering |
 
 The Tint checkout is the pinned, read-only Tint mirror. That upstream repository
@@ -45,13 +45,19 @@ make -C NybleR
 Targets:
 
 - `lexbor` — build and install local Lexbor into `NybleR/build/local`
-- `tint` — fetch Tint's pinned dependencies with `gclient`, then build Tint
+- `tint` — fetch Tint's pinned build dependencies with `gclient`, then build Tint
 - `mesa` — build local Mesa with software GL/Vulkan drivers
 - `deps` — all three local dependency builds
 - `nybler` — build the NybleR static library and C/C++ headers
 - `dom-smoke` — locally built Lexbor smoke test: `<h1> hello world </h1>` → `hello world`
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
+
+The Tint sync uses `config/tint.gclient`, a minimal checkout that skips Chromium
+test infrastructure, CTS, DXC, libc++, protobuf, googletest, benchmark, and
+Vulkan validation layers. CIPD dependencies are ignored because CMake uses the
+local Ninja/CMake installation. `NYBLER_JOBS` defaults to `2`; raise or lower it
+with, for example, `make -C NybleR tint NYBLER_JOBS=1`.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.

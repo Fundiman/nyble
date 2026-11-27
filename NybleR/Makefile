@@ -6,9 +6,11 @@
 SHELL := /bin/sh
 
 ifeq ($(OS),Windows_NT)
-TINT_GCLIENT = cmd.exe /c "set DEPOT_TOOLS_UPDATE=0&& set PATH=$(DEPOT_TOOLS);%PATH% && gclient.bat sync --nohooks"
+PYTHON ?= python
+TINT_GCLIENT = cmd.exe /c "set DEPOT_TOOLS_UPDATE=0&& set PATH=$(DEPOT_TOOLS);%PATH%&& $(PYTHON) $(DEPOT_TOOLS)/gclient.py sync --nohooks --ignore-dep-type=cipd"
 else
-TINT_GCLIENT = DEPOT_TOOLS_UPDATE=0 PATH="$(DEPOT_TOOLS):$$PATH" gclient sync --nohooks
+PYTHON ?= python3
+TINT_GCLIENT = DEPOT_TOOLS_UPDATE=0 PATH="$(DEPOT_TOOLS):$$PATH" $(PYTHON) $(DEPOT_TOOLS)/gclient.py sync --nohooks --ignore-dep-type=cipd
 endif
 
 BUILD ?= build
@@ -21,6 +23,8 @@ NINJA ?= ninja
 CMAKE_GENERATOR ?= Ninja
 NYBLER_CC ?= clang
 NYBLER_CXX ?= clang++
+NYBLER_JOBS ?= 2
+NYBLER_TMP := $(CURDIR)/$(BUILD)/tmp
 
 ROOT := $(abspath ..)
 LEXBOR_SRC := $(ROOT)/third_party/lexbor
@@ -70,7 +74,7 @@ $(LEXBOR_STAMP):
 		-DLEXBOR_BUILD_STATIC=ON \
 		-DLEXBOR_BUILD_TESTS=OFF \
 		-DLEXBOR_BUILD_EXAMPLES=OFF
-	$(CMAKE) --build $(LEXBOR_BUILD) --config $(BUILD_TYPE) --parallel
+	$(CMAKE) --build $(LEXBOR_BUILD) --config $(BUILD_TYPE) --parallel $(NYBLER_JOBS)
 	$(CMAKE) --install $(LEXBOR_BUILD) --config $(BUILD_TYPE)
 	$(CMAKE) -E touch $@
 
@@ -80,7 +84,9 @@ $(DEPOT_TOOLS):
 
 $(TINT_STAMP): $(DEPOT_TOOLS)
 	$(CMAKE) -E make_directory $(STAMP_DIR)
-	$(CMAKE) -E copy $(TINT_SRC)/standalone.gclient $(TINT_SRC)/.gclient
+	$(CMAKE) -E make_directory $(NYBLER_TMP)
+	$(CMAKE) -E copy $(CURDIR)/config/tint.gclient $(TINT_SRC)/.gclient
+	$(CMAKE) -E rm -f $(TINT_SRC)/.gclient_entries
 	cd $(TINT_SRC) && $(TINT_GCLIENT)
 	$(CMAKE) -S $(TINT_SRC) -B $(TINT_BUILD) -G $(CMAKE_GENERATOR) \
 		-DCMAKE_C_COMPILER=$(NYBLER_CC) \
@@ -97,10 +103,11 @@ $(TINT_STAMP): $(DEPOT_TOOLS)
 		-DTINT_BUILD_WGSL_READER=ON \
 		-DTINT_BUILD_WGSL_WRITER=ON \
 		-DTINT_BUILD_GLSL_WRITER=ON \
-		-DTINT_BUILD_HLSL_WRITER=ON \
+		-DTINT_BUILD_HLSL_WRITER=OFF \
 		-DTINT_BUILD_MSL_WRITER=ON \
 		-DTINT_ENABLE_INSTALL=ON
-	$(CMAKE) --build $(TINT_BUILD) --target tint_cmd_tint_cmd --parallel
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --parallel $(NYBLER_JOBS)
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --target tint_utils_bytes --parallel $(NYBLER_JOBS)
 	$(CMAKE) --install $(TINT_BUILD)
 	$(CMAKE) -E touch $@
 
@@ -110,7 +117,7 @@ $(MESA_STAMP):
 		--prefix=$(PREFIX) \
 		--buildtype=release \
 		$(MESA_ARGS)
-	$(MESON) compile -C $(MESA_BUILD)
+	$(MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
 	$(MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
@@ -122,7 +129,7 @@ $(NYBLER_STAMP):
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_PREFIX_PATH=$(PREFIX) \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX)
-	$(CMAKE) --build $(NYBLER_BUILD) --config $(BUILD_TYPE) --parallel
+	$(CMAKE) --build $(NYBLER_BUILD) --config $(BUILD_TYPE) --parallel $(NYBLER_JOBS)
 	$(CMAKE) --install $(NYBLER_BUILD) --config $(BUILD_TYPE)
 	$(CMAKE) -E touch $@
 
