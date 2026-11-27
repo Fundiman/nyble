@@ -16,13 +16,19 @@
 #include <unistd.h>
 #endif
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
+#include <mbedtls/bignum.h>
 #include <mbedtls/cipher.h>
 #include <mbedtls/constant_time.h>
+#include <mbedtls/ecdh.h>
+#include <mbedtls/ecdsa.h>
 #include <mbedtls/ecp.h>
 #include <mbedtls/gcm.h>
 #include <mbedtls/md.h>
+#include <mbedtls/nist_kw.h>
+#include <mbedtls/pk.h>
 #include <mbedtls/pkcs5.h>
 #include <mbedtls/platform_util.h>
+#include <mbedtls/rsa.h>
 #include <mbedtls/sha256.h>
 
 #pragma GCC diagnostic push
@@ -637,7 +643,19 @@ typedef enum {
   CRYPTO_KEY_HMAC = 1,
   CRYPTO_KEY_AES_GCM,
   CRYPTO_KEY_PBKDF2,
+  CRYPTO_KEY_AES_KW,
+  CRYPTO_KEY_RSA_PKCS1,
+  CRYPTO_KEY_RSA_PSS,
+  CRYPTO_KEY_RSA_OAEP,
+  CRYPTO_KEY_ECDSA,
+  CRYPTO_KEY_ECDH,
 } ant_crypto_key_kind_t;
+
+typedef enum {
+  CRYPTO_KEY_TYPE_SECRET = 0,
+  CRYPTO_KEY_TYPE_PUBLIC,
+  CRYPTO_KEY_TYPE_PRIVATE,
+} ant_crypto_key_type_t;
 
 typedef enum {
   CRYPTO_KEY_USAGE_ENCRYPT     = 1u << 0,
@@ -656,8 +674,68 @@ typedef struct {
   uint8_t *key;
   size_t key_len;
   uint8_t usages;
+  uint8_t key_type;
   bool extractable;
+  void *pkey;          /* mbedTLS mbedtls_pk_context* for asymmetric keys. */
+  uint32_t bits;       /* RSA modulus length or EC curve size. */
+  uint32_t salt_len;   /* RSA-PSS salt length in bytes. */
+  char curve[16];      /* Named curve for EC keys. */
 } ant_crypto_key_t;
+
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+/* Asymmetric WebCrypto helpers are defined near the end of this backend so the
+ * shared secret-key logic above can stay compact. */
+static ant_crypto_key_kind_t crypto_asym_kind_from_name(const char *name, size_t len);
+static bool crypto_is_asym_kind(ant_crypto_key_kind_t kind);
+static ant_value_t crypto_check_asym_usages(
+  ant_t *js, ant_crypto_key_kind_t kind, uint8_t key_type, uint8_t usages
+);
+static ant_value_t crypto_make_key_pair(
+  ant_t *js, ant_crypto_key_t *private_key, uint32_t private_bits,
+  ant_crypto_key_t *public_key, uint32_t public_bits
+);
+static ant_value_t crypto_make_asym_key_object(
+  ant_t *js, ant_crypto_key_t *key, uint32_t bits
+);
+static ant_value_t crypto_import_raw_key(
+  ant_t *js, const uint8_t *bytes, size_t len, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_import_jwk_key(
+  ant_t *js, ant_value_t jwk, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_import_der_key(
+  ant_t *js, bool private_key, const uint8_t *bytes, size_t len,
+  ant_value_t algorithm, ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_export_jwk_key(ant_t *js, ant_crypto_key_t *key);
+static ant_value_t crypto_export_der_key(ant_t *js, bool private_key, ant_crypto_key_t *key);
+static ant_value_t crypto_asym_sign(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm, ant_value_t data
+);
+static ant_value_t crypto_asym_verify(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm,
+  ant_value_t signature, ant_value_t data
+);
+static ant_value_t crypto_asym_encrypt(
+  ant_t *js, bool encrypt, ant_crypto_key_t *key,
+  ant_value_t algorithm, ant_value_t data
+);
+static ant_value_t crypto_nist_kw(
+  ant_t *js, bool wrap, ant_crypto_key_t *key,
+  const uint8_t *input, size_t input_len, uint8_t **output, size_t *output_len
+);
+static ant_value_t crypto_ecdh_derive_bits(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm
+);
+static ant_value_t crypto_generate_asym_key(
+  ant_t *js, ant_value_t algorithm, ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_wrap_key_impl(ant_params_t);
+static ant_value_t crypto_unwrap_key_impl(ant_params_t);
+static ant_value_t crypto_derive_key_impl(ant_params_t);
+#endif
 
 typedef struct {
   EVP_CIPHER_CTX *ctx;
@@ -821,6 +899,11 @@ static void crypto_hmac_finalize(ant_t *js, ant_object_t *obj) {
 
 static void crypto_key_free(ant_crypto_key_t *key) {
   if (!key) return;
+  if (key->pkey) {
+    mbedtls_pk_free((mbedtls_pk_context *)key->pkey);
+    free(key->pkey);
+    key->pkey = NULL;
+  }
   mbedtls_platform_zeroize(key->key, key->key_len);
   free(key);
 }
@@ -1863,8 +1946,10 @@ static ant_value_t crypto_read_key_usages(ant_t *js, ant_value_t input, uint8_t 
 }
 
 static ant_value_t crypto_check_key_usages(
-  ant_t *js, ant_crypto_key_kind_t kind, uint8_t usages
+  ant_t *js, ant_crypto_key_kind_t kind, uint8_t key_type, uint8_t usages
 ) {
+  if (crypto_is_asym_kind(kind))
+    return crypto_check_asym_usages(js, kind, key_type, usages);
   uint8_t allowed;
   switch (kind) {
     case CRYPTO_KEY_AES_GCM:
@@ -1893,6 +1978,18 @@ static ant_value_t crypto_require_nonempty_secret_usages(
     : Ant_Value_Undefined;
 }
 
+static ant_crypto_key_kind_t crypto_kind_from_algorithm_name(
+  const char *value, size_t len
+) {
+  if (value && len == 7 && strncasecmp(value, "AES-GCM", 7) == 0)
+    return CRYPTO_KEY_AES_GCM;
+  if (value && len == 4 && strncasecmp(value, "HMAC", 4) == 0)
+    return CRYPTO_KEY_HMAC;
+  if (value && len == 6 && strncasecmp(value, "PBKDF2", 6) == 0)
+    return CRYPTO_KEY_PBKDF2;
+  return crypto_asym_kind_from_name(value, len);
+}
+
 static ant_value_t crypto_get_key_algorithm_kind(
   ant_t *js, ant_value_t algorithm,
   ant_crypto_key_kind_t *kind
@@ -1902,18 +1999,8 @@ static ant_value_t crypto_get_key_algorithm_kind(
 
   size_t len = 0;
   const char *value = js_getstr(js, name_value, &len);
-  if (value && len == 7 && strncasecmp(value, "AES-GCM", 7) == 0) {
-    *kind = CRYPTO_KEY_AES_GCM;
-    return Ant_Value_Undefined;
-  }
-  if (value && len == 4 && strncasecmp(value, "HMAC", 4) == 0) {
-    *kind = CRYPTO_KEY_HMAC;
-    return Ant_Value_Undefined;
-  }
-  if (value && len == 6 && strncasecmp(value, "PBKDF2", 6) == 0) {
-    *kind = CRYPTO_KEY_PBKDF2;
-    return Ant_Value_Undefined;
-  }
+  *kind = crypto_kind_from_algorithm_name(value, len);
+  if (*kind) return Ant_Value_Undefined;
   return crypto_dom_exception_error(js, "Unsupported key algorithm", "NotSupportedError");
 }
 
@@ -2073,27 +2160,102 @@ static ant_value_t crypto_subtle_import_key_impl(ant_params_t) {
   bool raw = false;
   ant_value_t result = crypto_read_key_format(js, args[0], &raw);
   if (is_err(result)) return result;
+
+  ant_value_t format = crypto_webcrypto_string(js, args[0]);
+  if (is_err(format)) return format;
+  size_t format_len = 0;
+  const char *format_name = js_getstr(js, format, &format_len);
+
+  const uint8_t *source = NULL;
+  size_t len = 0;
+  uint8_t *bytes = NULL;
+  if (buffer_source_get_bytes(js, args[1], &source, &len)) {
+    bytes = (uint8_t *)malloc(len ? len : 1);
+    if (!bytes) return Ant_Error_CreateOutOfMemory(js);
+    if (len) memcpy(bytes, source, len);
+  }
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[2]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  ant_crypto_key_kind_t asym_kind = crypto_asym_kind_from_name(name, name_len);
+
+  if (asym_kind) {
+    if (format_name && format_len == 3 && memcmp(format_name, "jwk", 3) == 0) {
+      free(bytes);
+      return crypto_import_jwk_key(js, args[1], args[2], args[3], args[4]);
+    }
+
+    if (asym_kind == CRYPTO_KEY_AES_KW && raw) {
+      if (!bytes) {
+        free(bytes);
+        return js_mkerr_typed(js, JS_ERR_TYPE, "keyData must be a BufferSource");
+      }
+      uint8_t usages = 0;
+      result = crypto_read_key_usages(js, args[4], &usages);
+      if (is_err(result)) { free(bytes); return result; }
+      result = crypto_check_asym_usages(js, asym_kind, CRYPTO_KEY_TYPE_SECRET, usages);
+      if (is_err(result)) { free(bytes); return result; }
+      if (len != 16 && len != 24 && len != 32) {
+        free(bytes);
+        return crypto_dom_exception_error(js, "Invalid AES-KW key length", "DataError");
+      }
+
+      ant_crypto_key_t *key = crypto_key_alloc(len);
+      if (!key) { free(bytes); return Ant_Error_CreateOutOfMemory(js); }
+      memcpy(key->key, bytes, len);
+      free(bytes);
+      key->kind = asym_kind;
+      key->key_type = CRYPTO_KEY_TYPE_SECRET;
+      key->extractable = js_truthy(js, args[3]);
+      key->usages = usages;
+      return crypto_make_asym_key_object(js, key, (uint32_t)(len * 8));
+    }
+
+    if (format_name && ((format_len == 4 && memcmp(format_name, "spki", 4) == 0) ||
+                        (format_len == 5 && memcmp(format_name, "pkcs8", 5) == 0))) {
+      if (!bytes) {
+        free(bytes);
+        return js_mkerr_typed(js, JS_ERR_TYPE, "keyData must be a BufferSource");
+      }
+      result = crypto_import_der_key(
+        js, format_len == 5, bytes, len, args[2], args[3], args[4]
+      );
+      free(bytes);
+      return result;
+    }
+
+    free(bytes);
+    return crypto_dom_exception_error(
+      js, "Unsupported key format for asymmetric algorithm", "NotSupportedError"
+    );
+  }
+
   if (!raw)
     return crypto_dom_exception_error(js, "Only raw key import is supported", "NotSupportedError");
 
   uint8_t usages = 0;
   result = crypto_read_key_usages(js, args[4], &usages);
-  if (is_err(result)) return result;
+  if (is_err(result)) { free(bytes); return result; }
 
-  const uint8_t *bytes = NULL;
-  size_t len = 0;
-  if (!buffer_source_get_bytes(js, args[1], &bytes, &len))
+  if (!bytes) {
+    free(bytes);
     return js_mkerr_typed(js, JS_ERR_TYPE, "keyData must be a BufferSource");
+  }
 
   ant_crypto_key_t *key = crypto_key_alloc(len);
-  if (!key) return Ant_Error_CreateOutOfMemory(js);
+  if (!key) { free(bytes); return Ant_Error_CreateOutOfMemory(js); }
   if (len) memcpy(key->key, bytes, len);
   key->extractable = js_truthy(js, args[3]);
   key->usages = usages;
   uint32_t bits = 0;
 
-  result = crypto_get_key_algorithm_kind(js, args[2], &key->kind);
-  if (is_err(result)) goto cleanup;
+  key->kind = crypto_kind_from_algorithm_name(name, name_len);
+  if (!key->kind) {
+    result = crypto_dom_exception_error(js, "Unsupported key algorithm", "NotSupportedError");
+    goto cleanup;
+  }
   bool length_present = false;
   if (key->kind == CRYPTO_KEY_HMAC) {
     result = crypto_get_hmac_digest(js, args[2], &key->md);
@@ -2102,7 +2264,7 @@ static ant_value_t crypto_subtle_import_key_impl(ant_params_t) {
       js, args[2], false, UINT32_MAX, &length_present, &bits);
     if (is_err(result)) goto cleanup;
   }
-  result = crypto_check_key_usages(js, key->kind, usages);
+  result = crypto_check_key_usages(js, key->kind, key->key_type, usages);
   if (is_err(result)) goto cleanup;
 
   if (key->kind == CRYPTO_KEY_AES_GCM) {
@@ -2129,9 +2291,11 @@ static ant_value_t crypto_subtle_import_key_impl(ant_params_t) {
 
   result = crypto_require_nonempty_secret_usages(js, usages);
   if (is_err(result)) goto cleanup;
+  free(bytes);
   return crypto_make_key_object(js, key, bits);
 
 cleanup:
+  free(bytes);
   crypto_key_free(key);
   return result;
 }
@@ -2144,6 +2308,13 @@ static ant_value_t crypto_subtle_generate_key_impl(ant_params_t) {
   if (nargs < 3)
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "subtle.generateKey requires algorithm, extractable, and keyUsages");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  if (crypto_asym_kind_from_name(name, name_len))
+    return crypto_generate_asym_key(js, args[0], args[1], args[2]);
 
   uint8_t usages = 0;
   ant_value_t result = crypto_read_key_usages(js, args[2], &usages);
@@ -2165,7 +2336,7 @@ static ant_value_t crypto_subtle_generate_key_impl(ant_params_t) {
     js, args[0], kind == CRYPTO_KEY_AES_GCM,
     kind == CRYPTO_KEY_AES_GCM ? UINT16_MAX : UINT32_MAX, &length_present, &bits);
   if (is_err(result)) return result;
-  result = crypto_check_key_usages(js, kind, usages);
+  result = crypto_check_key_usages(js, kind, CRYPTO_KEY_TYPE_SECRET, usages);
   if (is_err(result)) return result;
 
   if (kind == CRYPTO_KEY_AES_GCM) {
@@ -2204,17 +2375,40 @@ static ant_value_t crypto_subtle_export_key_impl(ant_params_t) {
   bool raw = false;
   ant_value_t result = crypto_read_key_format(js, args[0], &raw);
   if (is_err(result)) return result;
+  ant_value_t format = crypto_webcrypto_string(js, args[0]);
+  if (is_err(format)) return format;
+  size_t format_len = 0;
+  const char *format_name = js_getstr(js, format, &format_len);
+
   ant_crypto_key_t *key = crypto_require_key(args[1]);
   if (!key) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.exportKey requires a CryptoKey");
-  }
-  if (key->kind != CRYPTO_KEY_AES_GCM && key->kind != CRYPTO_KEY_HMAC) {
-    return crypto_dom_exception_error(js, "CryptoKey algorithm cannot be exported", "NotSupportedError");
   }
   if (!key->extractable) {
     return crypto_dom_exception_error(js, "CryptoKey is not extractable", "InvalidAccessError");
   }
 
+  if (crypto_is_asym_kind(key->kind)) {
+    if (raw && key->kind == CRYPTO_KEY_AES_KW)
+      return create_arraybuffer_copy(js, key->key, key->key_len);
+    if (format_name && format_len == 3 && memcmp(format_name, "jwk", 3) == 0)
+      return crypto_export_jwk_key(js, key);
+    if (format_name && format_len == 4 && memcmp(format_name, "spki", 4) == 0) {
+      if (!key->pkey)
+        return crypto_dom_exception_error(js, "Key format is not supported", "NotSupportedError");
+      return crypto_export_der_key(js, false, key);
+    }
+    if (format_name && format_len == 5 && memcmp(format_name, "pkcs8", 5) == 0) {
+      if (!key->pkey || key->key_type != CRYPTO_KEY_TYPE_PRIVATE)
+        return crypto_dom_exception_error(js, "pkcs8 export requires a private key", "InvalidAccessError");
+      return crypto_export_der_key(js, true, key);
+    }
+    return crypto_dom_exception_error(js, "Unsupported export format for asymmetric key", "NotSupportedError");
+  }
+
+  if (key->kind != CRYPTO_KEY_AES_GCM && key->kind != CRYPTO_KEY_HMAC) {
+    return crypto_dom_exception_error(js, "CryptoKey algorithm cannot be exported", "NotSupportedError");
+  }
   if (!raw)
     return crypto_dom_exception_error(js, "Only raw key export is supported", "NotSupportedError");
   return create_arraybuffer_copy(js, key->key, key->key_len);
@@ -2226,6 +2420,35 @@ static ant_value_t js_crypto_subtle_export_key(ant_params_t) {
 
 static ant_value_t crypto_subtle_derive_bits_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.deriveBits requires algorithm, baseKey, and length");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  if (crypto_asym_kind_from_name(name, name_len) == CRYPTO_KEY_ECDH) {
+    ant_crypto_key_t *key = crypto_require_key(args[1]);
+    if (!key || key->kind != CRYPTO_KEY_ECDH)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "ECDH deriveBits requires an ECDH CryptoKey");
+    if (!(key->usages & CRYPTO_KEY_USAGE_DERIVE_BITS))
+      return crypto_dom_exception_error(js, "CryptoKey does not permit deriveBits", "InvalidAccessError");
+
+    double length_num = Ant_Value_AsNumberUnchecked(args[2]);
+    if (!isfinite(length_num) || length_num < 0 || length_num > (double)INT_MAX * 8.0 ||
+        fmod(length_num, 8) != 0)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "deriveBits length must be a non-negative multiple of 8");
+    size_t requested = (size_t)(length_num / 8);
+
+    ant_value_t derived = crypto_ecdh_derive_bits(js, key, args[0]);
+    if (is_err(derived)) return derived;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    if (!buffer_source_get_bytes(js, derived, &bytes, &len))
+      return js_mkerr(js, "ECDH deriveBits failed");
+    if (requested > len)
+      return js_mkerr_typed(js, JS_ERR_RANGE, "deriveBits length exceeds ECDH output");
+    return create_arraybuffer_copy(js, bytes, requested);
+  }
+
   if (!crypto_algorithm_is(js, args[0], "PBKDF2")) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported deriveBits algorithm");
   }
@@ -2305,6 +2528,21 @@ static ant_value_t crypto_hmac_once(
 
 static ant_value_t crypto_subtle_sign_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.sign requires algorithm, key, and data");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (crypto_is_asym_kind(kind)) {
+    if (kind != CRYPTO_KEY_RSA_PKCS1 && kind != CRYPTO_KEY_RSA_PSS && kind != CRYPTO_KEY_ECDSA)
+      return crypto_dom_exception_error(js, "Unsupported signing algorithm", "NotSupportedError");
+    ant_crypto_key_t *key = NULL;
+    ant_value_t error = crypto_authorize_key(js, args[1], kind, CRYPTO_KEY_USAGE_SIGN, &key);
+    if (is_err(error)) return error;
+    return crypto_asym_sign(js, key, args[0], args[2]);
+  }
+
   if (!crypto_algorithm_is(js, args[0], "HMAC")) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported signing algorithm", "NotSupportedError");
@@ -2321,6 +2559,21 @@ static ant_value_t js_crypto_subtle_sign(ant_params_t) {
 
 static ant_value_t crypto_subtle_verify_impl(ant_params_t) {
   if (nargs < 4) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.verify requires algorithm, key, signature, and data");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (crypto_is_asym_kind(kind)) {
+    if (kind != CRYPTO_KEY_RSA_PKCS1 && kind != CRYPTO_KEY_RSA_PSS && kind != CRYPTO_KEY_ECDSA)
+      return crypto_dom_exception_error(js, "Unsupported verification algorithm", "NotSupportedError");
+    ant_crypto_key_t *key = NULL;
+    ant_value_t error = crypto_authorize_key(js, args[1], kind, CRYPTO_KEY_USAGE_VERIFY, &key);
+    if (is_err(error)) return error;
+    return crypto_asym_verify(js, key, args[0], args[2], args[3]);
+  }
+
   if (!crypto_algorithm_is(js, args[0], "HMAC")) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported verification algorithm", "NotSupportedError");
@@ -2451,6 +2704,21 @@ static ant_value_t crypto_aes_gcm_crypt(
 
 static ant_value_t crypto_subtle_encrypt_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.encrypt requires algorithm, key, and data");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (crypto_is_asym_kind(kind)) {
+    if (kind != CRYPTO_KEY_RSA_OAEP)
+      return crypto_dom_exception_error(js, "Unsupported encryption algorithm", "NotSupportedError");
+    ant_crypto_key_t *key = NULL;
+    ant_value_t error = crypto_authorize_key(js, args[1], kind, CRYPTO_KEY_USAGE_ENCRYPT, &key);
+    if (is_err(error)) return error;
+    return crypto_asym_encrypt(js, true, key, args[0], args[2]);
+  }
+
   if (!crypto_algorithm_is(js, args[0], "AES-GCM")) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported encryption algorithm", "NotSupportedError");
@@ -2463,6 +2731,21 @@ static ant_value_t crypto_subtle_encrypt_impl(ant_params_t) {
 
 static ant_value_t crypto_subtle_decrypt_impl(ant_params_t) {
   if (nargs < 3) return js_mkerr_typed(js, JS_ERR_TYPE, "subtle.decrypt requires algorithm, key, and data");
+
+  ant_value_t name_value = crypto_subtle_get_algorithm_name(js, args[0]);
+  if (is_err(name_value)) return name_value;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_value, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (crypto_is_asym_kind(kind)) {
+    if (kind != CRYPTO_KEY_RSA_OAEP)
+      return crypto_dom_exception_error(js, "Unsupported decryption algorithm", "NotSupportedError");
+    ant_crypto_key_t *key = NULL;
+    ant_value_t error = crypto_authorize_key(js, args[1], kind, CRYPTO_KEY_USAGE_DECRYPT, &key);
+    if (is_err(error)) return error;
+    return crypto_asym_encrypt(js, false, key, args[0], args[2]);
+  }
+
   if (!crypto_algorithm_is(js, args[0], "AES-GCM")) {
     if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
     return crypto_dom_exception_error(js, "Unsupported decryption algorithm", "NotSupportedError");
@@ -3093,6 +3376,18 @@ static ant_value_t js_crypto_scrypt(ant_params_t) {
   return is_err(cb_result) ? cb_result : Ant_Value_Undefined;
 }
 
+static ant_value_t js_crypto_subtle_wrap_key(ant_params_t) {
+  return crypto_subtle_call(js, args, nargs, call_this, call_func, crypto_wrap_key_impl);
+}
+
+static ant_value_t js_crypto_subtle_unwrap_key(ant_params_t) {
+  return crypto_subtle_call(js, args, nargs, call_this, call_func, crypto_unwrap_key_impl);
+}
+
+static ant_value_t js_crypto_subtle_derive_key(ant_params_t) {
+  return crypto_subtle_call(js, args, nargs, call_this, call_func, crypto_derive_key_impl);
+}
+
 static ant_value_t create_crypto_obj(ant_t *js) {
   ant_value_t crypto_obj = Ant_Object_Create(js);
   ant_value_t subtle_obj = Ant_Object_Create(js);
@@ -3103,7 +3398,9 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   js_set(js, crypto_obj, "randomUUID", Ant_Function_CreateWithArity(js_crypto_random_uuid, 1));
   js_set(js, crypto_obj, "randomUUIDv7", Ant_Function_Create(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", Ant_Function_Create(js_crypto_get_random_values));
-  // TODO: add remaining WebCrypto key formats, key derivation, wrapping, and asymmetric algorithms.
+  js_set(js, subtle_obj, "wrapKey", Ant_Function_Create(js_crypto_subtle_wrap_key));
+  js_set(js, subtle_obj, "unwrapKey", Ant_Function_Create(js_crypto_subtle_unwrap_key));
+  js_set(js, subtle_obj, "deriveKey", Ant_Function_Create(js_crypto_subtle_derive_key));
   js_set(js, subtle_obj, "digest", Ant_Function_Create(js_crypto_subtle_digest));
   js_set(js, subtle_obj, "importKey", Ant_Function_Create(js_crypto_subtle_import_key));
   js_set(js, subtle_obj, "generateKey", Ant_Function_Create(js_crypto_subtle_generate_key));
@@ -3158,6 +3455,1571 @@ ant_value_t crypto_library(ant_t *js) {
   js_set_tostringtag(js, lib, js_mkstr(js, "crypto", 6));
 
   return lib;
+}
+
+/* ------------------------------------------------------------------------- *
+ * WebCrypto asymmetric keys, JWK, and key wrapping (mbedTLS backend).
+ * ------------------------------------------------------------------------- */
+
+static int crypto_mbedtls_rng(void *ctx, unsigned char *buf, size_t len) {
+  (void)ctx;
+  return crypto_fill_random(buf, len) == 0 ? 0 : -1;
+}
+
+typedef struct {
+  const char *name;
+  mbedtls_ecp_group_id id;
+  size_t coords;
+  const uint8_t *oid;
+  size_t oid_len;
+} crypto_curve_info_t;
+
+static const uint8_t k_oid_ec_public_key[] = {
+  0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
+};
+static const uint8_t k_oid_rsa_encryption[] = {
+  0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
+};
+static const uint8_t k_oid_secp256r1[] = {
+  0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07
+};
+static const uint8_t k_oid_secp384r1[] = {
+  0x2b, 0x81, 0x04, 0x00, 0x22
+};
+static const uint8_t k_oid_secp521r1[] = {
+  0x2b, 0x81, 0x04, 0x00, 0x23
+};
+
+#define CRYPTO_CURVE_ENTRY(NAME, ID, COORDS, OID) \
+  { NAME, ID, COORDS, OID, sizeof(OID) }
+
+static const crypto_curve_info_t crypto_curve_info[] = {
+  CRYPTO_CURVE_ENTRY("P-256", MBEDTLS_ECP_DP_SECP256R1, 32, k_oid_secp256r1),
+  CRYPTO_CURVE_ENTRY("secp256r1", MBEDTLS_ECP_DP_SECP256R1, 32, k_oid_secp256r1),
+  CRYPTO_CURVE_ENTRY("prime256v1", MBEDTLS_ECP_DP_SECP256R1, 32, k_oid_secp256r1),
+  CRYPTO_CURVE_ENTRY("P-384", MBEDTLS_ECP_DP_SECP384R1, 48, k_oid_secp384r1),
+  CRYPTO_CURVE_ENTRY("secp384r1", MBEDTLS_ECP_DP_SECP384R1, 48, k_oid_secp384r1),
+  CRYPTO_CURVE_ENTRY("P-521", MBEDTLS_ECP_DP_SECP521R1, 66, k_oid_secp521r1),
+  CRYPTO_CURVE_ENTRY("secp521r1", MBEDTLS_ECP_DP_SECP521R1, 66, k_oid_secp521r1),
+};
+
+static const crypto_curve_info_t *crypto_curve_by_name(const char *name, size_t len) {
+  if (!name) return NULL;
+  for (size_t i = 0; i < sizeof(crypto_curve_info) / sizeof(crypto_curve_info[0]); i++) {
+    const char *candidate = crypto_curve_info[i].name;
+    if (strlen(candidate) == len && strncasecmp(name, candidate, len) == 0)
+      return &crypto_curve_info[i];
+  }
+  return NULL;
+}
+
+static const crypto_curve_info_t *crypto_curve_by_id(mbedtls_ecp_group_id id) {
+  for (size_t i = 0; i < sizeof(crypto_curve_info) / sizeof(crypto_curve_info[0]); i++) {
+    if (crypto_curve_info[i].id == id) return &crypto_curve_info[i];
+  }
+  return NULL;
+}
+
+static bool crypto_name_is(const char *name, size_t len, const char *expected) {
+  return name && strlen(expected) == len && strncasecmp(name, expected, len) == 0;
+}
+
+static ant_crypto_key_kind_t crypto_asym_kind_from_name(const char *name, size_t len) {
+  if (crypto_name_is(name, len, "RSASSA-PKCS1-v1_5")) return CRYPTO_KEY_RSA_PKCS1;
+  if (crypto_name_is(name, len, "RSA-PSS")) return CRYPTO_KEY_RSA_PSS;
+  if (crypto_name_is(name, len, "RSA-OAEP")) return CRYPTO_KEY_RSA_OAEP;
+  if (crypto_name_is(name, len, "ECDSA")) return CRYPTO_KEY_ECDSA;
+  if (crypto_name_is(name, len, "ECDH")) return CRYPTO_KEY_ECDH;
+  if (crypto_name_is(name, len, "AES-KW")) return CRYPTO_KEY_AES_KW;
+  return 0;
+}
+
+static bool crypto_is_asym_kind(ant_crypto_key_kind_t kind) {
+  return kind >= CRYPTO_KEY_AES_KW;
+}
+
+static mbedtls_md_type_t crypto_md_type(const EVP_MD *md) {
+  return md ? (mbedtls_md_type_t)mbedtls_md_get_type(md) : MBEDTLS_MD_NONE;
+}
+
+static const EVP_MD *crypto_algorithm_hash(ant_t *js, ant_value_t algorithm) {
+  if (!is_object_type(algorithm)) return NULL;
+  ant_value_t hash = js_get(js, algorithm, "hash");
+  if (is_err(hash) || vtype(hash) == kTypeUndefined) return NULL;
+  return crypto_digest_from_algorithm(js, hash);
+}
+
+static ant_value_t crypto_check_asym_usages(
+  ant_t *js, ant_crypto_key_kind_t kind, uint8_t key_type, uint8_t usages
+) {
+  uint8_t allowed = 0;
+  switch (kind) {
+    case CRYPTO_KEY_RSA_PKCS1:
+    case CRYPTO_KEY_RSA_PSS:
+    case CRYPTO_KEY_ECDSA:
+      allowed = key_type == CRYPTO_KEY_TYPE_PRIVATE
+        ? CRYPTO_KEY_USAGE_SIGN : CRYPTO_KEY_USAGE_VERIFY;
+      break;
+    case CRYPTO_KEY_RSA_OAEP:
+      allowed = key_type == CRYPTO_KEY_TYPE_PRIVATE
+        ? (CRYPTO_KEY_USAGE_DECRYPT | CRYPTO_KEY_USAGE_UNWRAP_KEY)
+        : (CRYPTO_KEY_USAGE_ENCRYPT | CRYPTO_KEY_USAGE_WRAP_KEY);
+      break;
+    case CRYPTO_KEY_ECDH:
+      allowed = key_type == CRYPTO_KEY_TYPE_PRIVATE
+        ? (CRYPTO_KEY_USAGE_DERIVE_KEY | CRYPTO_KEY_USAGE_DERIVE_BITS) : 0;
+      break;
+    case CRYPTO_KEY_AES_KW:
+      allowed = CRYPTO_KEY_USAGE_WRAP_KEY | CRYPTO_KEY_USAGE_UNWRAP_KEY;
+      break;
+    default:
+      allowed = 0;
+      break;
+  }
+  return (usages & ~allowed)
+    ? crypto_dom_exception_error(js, "Unsupported key usage for algorithm", "SyntaxError")
+    : Ant_Value_Undefined;
+}
+
+static ant_crypto_key_t *crypto_key_alloc_asym_uninitialized(
+  ant_crypto_key_kind_t kind, uint8_t key_type
+) {
+  ant_crypto_key_t *key = crypto_key_alloc(0);
+  if (!key) return NULL;
+  key->kind = kind;
+  key->key_type = key_type;
+
+  if (kind == CRYPTO_KEY_AES_KW) return key;
+
+  mbedtls_pk_context *pk = calloc(1, sizeof(*pk));
+  if (!pk) { crypto_key_free(key); return NULL; }
+  mbedtls_pk_init(pk);
+  key->pkey = pk;
+  return key;
+}
+
+static ant_crypto_key_t *crypto_key_alloc_asym(
+  ant_crypto_key_kind_t kind, uint8_t key_type
+) {
+  ant_crypto_key_t *key = crypto_key_alloc_asym_uninitialized(kind, key_type);
+  if (!key || !key->pkey) return key;
+
+  const mbedtls_pk_info_t *info = kind == CRYPTO_KEY_ECDSA || kind == CRYPTO_KEY_ECDH
+    ? mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)
+    : mbedtls_pk_info_from_type(MBEDTLS_PK_RSA);
+  if (!info || mbedtls_pk_setup((mbedtls_pk_context *)key->pkey, info) != 0) {
+    crypto_key_free(key);
+    return NULL;
+  }
+  return key;
+}
+
+static ant_value_t crypto_jwk_get_bytes(ant_t *js, ant_value_t jwk,
+                                        const char *name, uint8_t **out, size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+  if (!is_object_type(jwk)) return Ant_Value_Undefined;
+  ant_value_t value = js_get(js, jwk, name);
+  if (is_err(value)) return value;
+  if (vtype(value) == kTypeUndefined || vtype(value) == kTypeNull) return Ant_Value_Undefined;
+  if (vtype(value) != kTypeString)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "JWK members must be strings");
+
+  size_t len = 0;
+  const char *text = js_getstr(js, value, &len);
+  uint8_t *bytes = ant_base64_decode_loose(text ? text : "", len, out_len);
+  if (!bytes) return Ant_Error_CreateOutOfMemory(js);
+  *out = bytes;
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_jwk_get_string(ant_t *js, ant_value_t jwk,
+                                         const char *name, const char **out, size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+  ant_value_t value = js_get(js, jwk, name);
+  if (is_err(value)) return value;
+  if (vtype(value) != kTypeString) return Ant_Value_Undefined;
+  *out = js_getstr(js, value, out_len);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_jwk_from_bytes(ant_t *js, const uint8_t *bytes, size_t len) {
+  ant_value_t json = js_get(js, js_glob(js), "JSON");
+  if (is_err(json)) return json;
+  ant_value_t parse = js_get(js, json, "parse");
+  if (is_err(parse)) return parse;
+
+  ant_value_t text = js_mkstr(js, (const char *)bytes, len);
+  if (is_err(text)) return text;
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, json);
+  GC_ROOT_PIN(js, parse);
+  GC_ROOT_PIN(js, text);
+
+  ant_value_t args[1] = { text };
+  ant_value_t result = sv_vm_call(js->vm, js, parse, json, args, 1, NULL, Ant_Value_Undefined);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_jwk_to_text(ant_t *js, ant_value_t jwk,
+                                      const char **out, size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+  ant_value_t json = js_get(js, js_glob(js), "JSON");
+  if (is_err(json)) return json;
+  ant_value_t stringify = js_get(js, json, "stringify");
+  if (is_err(stringify)) return stringify;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, json);
+  GC_ROOT_PIN(js, stringify);
+  GC_ROOT_PIN(js, jwk);
+  ant_value_t args[1] = { jwk };
+  ant_value_t result = sv_vm_call(js->vm, js, stringify, json, args, 1, NULL, Ant_Value_Undefined);
+  if (is_err(result) || Ant_Exception_Pending(js)) {
+    GC_ROOT_RESTORE(js, mark);
+    return is_err(result) ? result : Ant_Exception_Current(js);
+  }
+  if (vtype(result) != kTypeString) {
+    GC_ROOT_RESTORE(js, mark);
+    return js_mkerr(js, "JSON.stringify did not return a string");
+  }
+  GC_ROOT_PIN(js, result);
+  *out = js_getstr(js, result, out_len);
+  GC_ROOT_RESTORE(js, mark);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_jwk_prop(ant_t *js, ant_value_t obj,
+                                   const char *name, ant_value_t value) {
+  ant_value_t key = js_mkstr(js, name, strlen(name));
+  if (is_err(key)) return key;
+  return mkprop(js, obj, key, value, ANT_PROP_ATTR_ENUMERABLE);
+}
+
+static ant_value_t crypto_jwk_b64_prop(ant_t *js, ant_value_t obj,
+                                       const char *name, const uint8_t *data, size_t len) {
+  size_t encoded_len = 0;
+  char *encoded = ant_base64url_encode(data, len, &encoded_len);
+  if (!encoded) return Ant_Error_CreateOutOfMemory(js);
+  ant_value_t value = js_mkstr(js, encoded, encoded_len);
+  free(encoded);
+  if (is_err(value)) return value;
+  return crypto_jwk_prop(js, obj, name, value);
+}
+
+static ant_value_t crypto_jwk_mpi_prop(ant_t *js, ant_value_t obj,
+                                       const char *name, const mbedtls_mpi *mpi) {
+  size_t len = mbedtls_mpi_size(mpi);
+  uint8_t *bytes = malloc(len ? len : 1);
+  if (!bytes) return Ant_Error_CreateOutOfMemory(js);
+  int rc = mbedtls_mpi_write_binary(mpi, bytes, len);
+  ant_value_t result = rc == 0
+    ? crypto_jwk_b64_prop(js, obj, name, bytes, len)
+    : js_mkerr(js, "JWK parameter export failed");
+  free(bytes);
+  return result;
+}
+
+static ant_value_t crypto_asym_algorithm(ant_t *js, ant_crypto_key_t *key, uint32_t bits) {
+  const char *name = NULL;
+  switch (key->kind) {
+    case CRYPTO_KEY_AES_KW: name = "AES-KW"; break;
+    case CRYPTO_KEY_RSA_PKCS1: name = "RSASSA-PKCS1-v1_5"; break;
+    case CRYPTO_KEY_RSA_PSS: name = "RSA-PSS"; break;
+    case CRYPTO_KEY_RSA_OAEP: name = "RSA-OAEP"; break;
+    case CRYPTO_KEY_ECDSA: name = "ECDSA"; break;
+    case CRYPTO_KEY_ECDH: name = "ECDH"; break;
+    default: return js_mkerr(js, "Unsupported asymmetric algorithm");
+  }
+
+  ant_value_t obj = Ant_Object_CreateBare(js);
+  if (is_err(obj)) return obj;
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, obj);
+  ant_value_t result = Ant_Value_Undefined;
+
+#define CRYPTO_ALG_PROP(cname, value) do { \
+    result = js_mkprop_fast(js, obj, cname, strlen(cname), value); \
+    if (is_err(result)) goto alg_done; \
+  } while (0)
+
+  CRYPTO_ALG_PROP("name", js_mkstr(js, name, strlen(name)));
+  if (Ant_Exception_Pending(js)) { result = Ant_Exception_Current(js); goto alg_done; }
+
+  if (key->kind == CRYPTO_KEY_AES_KW) {
+    CRYPTO_ALG_PROP("length", Ant_Value_FromNumber((double)bits));
+  } else if (key->kind == CRYPTO_KEY_ECDSA || key->kind == CRYPTO_KEY_ECDH) {
+    CRYPTO_ALG_PROP("namedCurve", js_mkstr(js, key->curve, strlen(key->curve)));
+    if (Ant_Exception_Pending(js)) { result = Ant_Exception_Current(js); goto alg_done; }
+  } else {
+    CRYPTO_ALG_PROP("modulusLength", Ant_Value_FromNumber((double)bits));
+
+    mbedtls_rsa_context *rsa = key->pkey ? mbedtls_pk_rsa(*(mbedtls_pk_context *)key->pkey) : NULL;
+    mbedtls_mpi e;
+    mbedtls_mpi_init(&e);
+    ant_value_t exponent = Ant_Value_Undefined;
+    if (rsa && mbedtls_rsa_export(rsa, NULL, NULL, NULL, NULL, &e) == 0) {
+      size_t len = mbedtls_mpi_size(&e);
+      uint8_t *buf = malloc(len ? len : 1);
+      if (buf && mbedtls_mpi_write_binary(&e, buf, len) == 0)
+        exponent = crypto_make_buffer(js, buf, len);
+      free(buf);
+    }
+    mbedtls_mpi_free(&e);
+    if (is_err(exponent)) { result = exponent; goto alg_done; }
+    if (Ant_Exception_Pending(js)) { result = Ant_Exception_Current(js); goto alg_done; }
+    CRYPTO_ALG_PROP("publicExponent", exponent);
+
+    if (key->md) {
+      unsigned index = crypto_hash_record_index(key->md);
+      if (!index) {
+        result = crypto_dom_exception_error(js, "Unsupported key hash algorithm", "NotSupportedError");
+        goto alg_done;
+      }
+      ant_value_t hash = crypto_new_key_record(js, index);
+      if (is_err(hash)) { result = hash; goto alg_done; }
+      CRYPTO_ALG_PROP("hash", hash);
+    } else {
+      CRYPTO_ALG_PROP("hash", Ant_Value_Undefined);
+    }
+    if (key->kind == CRYPTO_KEY_RSA_PSS)
+      CRYPTO_ALG_PROP("saltLength", Ant_Value_FromNumber((double)key->salt_len));
+  }
+
+#undef CRYPTO_ALG_PROP
+
+alg_done:
+  if (!is_err(result)) result = obj;
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_make_asym_key_object(
+  ant_t *js, ant_crypto_key_t *key, uint32_t bits
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t algorithm = Ant_Value_Undefined;
+  ant_value_t usages = Ant_Value_Undefined;
+  ant_value_t obj = Ant_Value_Undefined;
+  ant_value_t type = Ant_Value_Undefined;
+  GC_ROOT_PIN(js, algorithm);
+  GC_ROOT_PIN(js, usages);
+  GC_ROOT_PIN(js, obj);
+  GC_ROOT_PIN(js, type);
+
+  algorithm = crypto_asym_algorithm(js, key, bits);
+  if (is_err(algorithm)) { obj = algorithm; goto asym_done; }
+
+  ant_value_t usage_values[8];
+  uint32_t usage_count = 0;
+  for (unsigned i = 0; i < 8; i++) {
+    if (key->usages & (1u << i))
+      usage_values[usage_count++] = js->mutable_roots.crypto_usage_strings[i];
+  }
+  usages = js_mkarr_dense_literal(js, usage_values, usage_count);
+  if (is_err(usages)) { obj = usages; goto asym_done; }
+
+  const char *type_name = key->key_type == CRYPTO_KEY_TYPE_PUBLIC ? "public" :
+    key->key_type == CRYPTO_KEY_TYPE_PRIVATE ? "private" : "secret";
+  type = js_mkstr(js, type_name, strlen(type_name));
+  if (is_err(type)) { obj = type; goto asym_done; }
+
+  obj = Ant_Object_CreateBare(js);
+  if (is_err(obj)) goto asym_done;
+  GC_ROOT_PIN(js, obj);
+  if (is_err(js_mkprop_fast(js, obj, "type", 4, type))) { obj = Ant_Exception_Current(js); goto asym_done; }
+  if (is_err(js_mkprop_fast(js, obj, "extractable", 11, Ant_Value_FromBool(key->extractable)))) {
+    obj = Ant_Exception_Current(js); goto asym_done;
+  }
+  if (is_err(js_mkprop_fast(js, obj, "algorithm", 9, algorithm))) {
+    obj = Ant_Exception_Current(js); goto asym_done;
+  }
+  if (is_err(js_mkprop_fast(js, obj, "usages", 6, usages))) {
+    obj = Ant_Exception_Current(js); goto asym_done;
+  }
+  js_set_tostringtag(js, obj, Ant_String_FromLiteral(js, "CryptoKey"));
+  if (Ant_Exception_Pending(js)) { obj = Ant_Exception_Current(js); goto asym_done; }
+  js_set_native(obj, key, CRYPTO_KEY_NATIVE_TAG);
+  js_set_finalizer(obj, crypto_key_finalize);
+  key = NULL;
+
+asym_done:
+  crypto_key_free(key);
+  GC_ROOT_RESTORE(js, root_mark);
+  return obj;
+}
+
+static ant_value_t crypto_make_key_pair(
+  ant_t *js, ant_crypto_key_t *private_key, uint32_t private_bits,
+  ant_crypto_key_t *public_key, uint32_t public_bits
+) {
+  if (!private_key || !public_key) {
+    crypto_key_free(private_key);
+    crypto_key_free(public_key);
+    return Ant_Error_CreateOutOfMemory(js);
+  }
+  GC_ROOT_SAVE(mark, js);
+  ant_value_t pair = Ant_Object_CreateBare(js);
+  if (is_err(pair)) { crypto_key_free(public_key); crypto_key_free(private_key); GC_ROOT_RESTORE(js, mark); return pair; }
+  GC_ROOT_PIN(js, pair);
+
+  ant_value_t private_obj = crypto_make_asym_key_object(js, private_key, private_bits);
+  private_key = NULL;
+  if (is_err(private_obj)) { crypto_key_free(public_key); GC_ROOT_RESTORE(js, mark); return private_obj; }
+  GC_ROOT_PIN(js, private_obj);
+
+  ant_value_t public_obj = crypto_make_asym_key_object(js, public_key, public_bits);
+  public_key = NULL;
+  if (is_err(public_obj)) { GC_ROOT_RESTORE(js, mark); return public_obj; }
+  GC_ROOT_PIN(js, public_obj);
+
+  ant_value_t result = js_mkprop_fast(js, pair, "privateKey", 10, private_obj);
+  if (is_err(result)) result = Ant_Exception_Current(js);
+  if (!is_err(result)) result = js_mkprop_fast(js, pair, "publicKey", 9, public_obj);
+  if (is_err(result)) result = Ant_Exception_Current(js);
+  else result = pair;
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_import_raw_key(
+  ant_t *js, const uint8_t *bytes, size_t len, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+) {
+  ant_value_t data = create_arraybuffer_copy(js, bytes, len);
+  if (is_err(data)) return data;
+  ant_value_t format = Ant_String_FromLiteral(js, "raw");
+  if (is_err(format)) return format;
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, data);
+  GC_ROOT_PIN(js, format);
+  GC_ROOT_PIN(js, algorithm);
+  GC_ROOT_PIN(js, extractable);
+  GC_ROOT_PIN(js, usages);
+  ant_value_t args[5] = { format, data, algorithm, extractable, usages };
+  ant_value_t result = crypto_subtle_import_key_impl(
+    js, args, 5, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined
+  );
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static bool crypto_jwk_mpi(ant_t *js, ant_value_t jwk, const char *name,
+                           mbedtls_mpi *mpi, bool *present, ant_value_t *error) {
+  uint8_t *bytes = NULL;
+  size_t len = 0;
+  *error = crypto_jwk_get_bytes(js, jwk, name, &bytes, &len);
+  if (is_err(*error)) return false;
+  *present = bytes != NULL;
+  if (!bytes) return true;
+  if (len == 0 || mbedtls_mpi_read_binary(mpi, bytes, len) != 0) {
+    free(bytes);
+    *error = crypto_dom_exception_error(js, "Invalid JWK key parameter", "DataError");
+    return false;
+  }
+  free(bytes);
+  return true;
+}
+
+static ant_value_t crypto_import_rsa_jwk(
+  ant_t *js, ant_value_t jwk, ant_crypto_key_t *key, const EVP_MD *md
+) {
+  mbedtls_mpi n, e, d, p, q;
+  mbedtls_mpi_init(&n); mbedtls_mpi_init(&e); mbedtls_mpi_init(&d);
+  mbedtls_mpi_init(&p); mbedtls_mpi_init(&q);
+  ant_value_t error = Ant_Value_Undefined;
+  bool present = false, private_key = false;
+
+  if (!crypto_jwk_mpi(js, jwk, "n", &n, &present, &error) || !present) goto fail;
+  if (!crypto_jwk_mpi(js, jwk, "e", &e, &present, &error) || !present) goto fail;
+  if (!crypto_jwk_mpi(js, jwk, "d", &d, &present, &error)) goto fail;
+  private_key = present;
+  if (!crypto_jwk_mpi(js, jwk, "p", &p, &present, &error)) goto fail;
+  if (!crypto_jwk_mpi(js, jwk, "q", &q, &present, &error)) goto fail;
+
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*(mbedtls_pk_context *)key->pkey);
+  if (mbedtls_rsa_import(rsa, &n, private_key && mbedtls_mpi_size(&p) ? &p : NULL,
+                         private_key && mbedtls_mpi_size(&q) ? &q : NULL,
+                         private_key ? &d : NULL, &e) != 0 ||
+      mbedtls_rsa_complete(rsa) != 0) {
+    error = crypto_dom_exception_error(js, "Invalid RSA JWK", "DataError");
+    goto fail;
+  }
+  if (private_key ? mbedtls_rsa_check_privkey(rsa) != 0 : mbedtls_rsa_check_pubkey(rsa) != 0) {
+    error = crypto_dom_exception_error(js, "Invalid RSA JWK", "DataError");
+    goto fail;
+  }
+  mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
+  if (private_key) key->key_type = CRYPTO_KEY_TYPE_PRIVATE;
+  key->bits = (uint32_t)mbedtls_mpi_bitlen(&n);
+  key->md = md;
+
+  mbedtls_mpi_free(&n); mbedtls_mpi_free(&e); mbedtls_mpi_free(&d);
+  mbedtls_mpi_free(&p); mbedtls_mpi_free(&q);
+  return Ant_Value_Undefined;
+
+fail:
+  mbedtls_mpi_free(&n); mbedtls_mpi_free(&e); mbedtls_mpi_free(&d);
+  mbedtls_mpi_free(&p); mbedtls_mpi_free(&q);
+  return is_err(error) ? error : crypto_dom_exception_error(js, "Invalid RSA JWK", "DataError");
+}
+
+static ant_value_t crypto_import_ec_jwk(
+  ant_t *js, ant_value_t jwk, ant_crypto_key_t *key, const EVP_MD *md
+) {
+  const char *curve_name = NULL;
+  size_t curve_name_len = 0;
+  ant_value_t error = crypto_jwk_get_string(js, jwk, "crv", &curve_name, &curve_name_len);
+  if (is_err(error)) return error;
+  const crypto_curve_info_t *curve = crypto_curve_by_name(curve_name, curve_name_len);
+  if (!curve)
+    return crypto_dom_exception_error(js, "Unsupported JWK elliptic curve", "NotSupportedError");
+
+  uint8_t *x = NULL, *y = NULL, *d = NULL;
+  size_t x_len = 0, y_len = 0, d_len = 0;
+  error = crypto_jwk_get_bytes(js, jwk, "x", &x, &x_len);
+  if (is_err(error)) goto done;
+  error = crypto_jwk_get_bytes(js, jwk, "y", &y, &y_len);
+  if (is_err(error)) goto done;
+  error = crypto_jwk_get_bytes(js, jwk, "d", &d, &d_len);
+  if (is_err(error)) goto done;
+  if (!x || !y || x_len != curve->coords || y_len != curve->coords) {
+    error = crypto_dom_exception_error(js, "Invalid EC JWK", "DataError");
+    goto done;
+  }
+
+  mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*(mbedtls_pk_context *)key->pkey);
+  if (mbedtls_ecp_group_load(&ec->grp, curve->id) != 0) {
+    error = crypto_dom_exception_error(js, "Unsupported EC curve", "NotSupportedError");
+    goto done;
+  }
+
+  uint8_t *point = malloc(1 + 2 * curve->coords);
+  if (!point) { error = Ant_Error_CreateOutOfMemory(js); goto done; }
+  mbedtls_ecp_point q;
+  mbedtls_ecp_point_init(&q);
+  point[0] = 4;
+  memcpy(point + 1, x, curve->coords);
+  memcpy(point + 1 + curve->coords, y, curve->coords);
+  if (mbedtls_ecp_point_read_binary(&ec->grp, &q, point, 1 + 2 * curve->coords) != 0 ||
+      mbedtls_ecp_check_pubkey(&ec->grp, &q) != 0 ||
+      mbedtls_ecp_copy(&ec->Q, &q) != 0) {
+    error = crypto_dom_exception_error(js, "Invalid EC JWK", "DataError");
+  } else if (d) {
+    key->key_type = CRYPTO_KEY_TYPE_PRIVATE;
+    if (d_len == 0 || d_len > curve->coords || mbedtls_mpi_read_binary(&ec->d, d, d_len) != 0 ||
+        mbedtls_ecp_check_privkey(&ec->grp, &ec->d) != 0) {
+      error = crypto_dom_exception_error(js, "Invalid EC JWK", "DataError");
+    }
+  }
+  mbedtls_ecp_point_free(&q);
+  free(point);
+  if (is_err(error)) goto done;
+
+  memcpy(key->curve, curve->name, strlen(curve->name) + 1);
+  key->bits = (uint32_t)(curve->coords * 8u);
+  key->md = md;
+  error = Ant_Value_Undefined;
+
+done:
+  free(x); free(y); free(d);
+  return error;
+}
+
+static ant_value_t crypto_import_jwk_key(
+  ant_t *js, ant_value_t jwk, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+) {
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (buffer_source_get_bytes(js, jwk, &bytes, &len)) {
+    jwk = crypto_jwk_from_bytes(js, bytes, len);
+    if (is_err(jwk)) return jwk;
+  }
+  if (!is_object_type(jwk))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "JWK keyData must be an object");
+
+  ant_crypto_key_t *key = NULL;
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, jwk);
+  GC_ROOT_PIN(js, algorithm);
+  GC_ROOT_PIN(js, extractable);
+  GC_ROOT_PIN(js, usages);
+
+  const char *kty = NULL;
+  size_t kty_len = 0;
+  ant_value_t result = crypto_jwk_get_string(js, jwk, "kty", &kty, &kty_len);
+  if (is_err(result)) goto done;
+  if (crypto_name_is(kty, kty_len, "oct")) {
+    uint8_t *secret = NULL;
+    size_t secret_len = 0;
+    result = crypto_jwk_get_bytes(js, jwk, "k", &secret, &secret_len);
+    if (is_err(result)) goto done;
+    if (!secret) {
+      result = crypto_dom_exception_error(js, "JWK oct key requires k", "DataError");
+      goto done;
+    }
+    result = crypto_import_raw_key(js, secret, secret_len, algorithm, extractable, usages);
+    free(secret);
+    goto done;
+  }
+
+  ant_value_t name_val = crypto_subtle_get_algorithm_name(js, algorithm);
+  if (is_err(name_val)) { result = name_val; goto done; }
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_val, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (!kind) {
+    result = crypto_dom_exception_error(js, "Unsupported JWK key algorithm", "NotSupportedError");
+    goto done;
+  }
+
+  uint8_t usage_mask = 0;
+  result = crypto_read_key_usages(js, usages, &usage_mask);
+  if (is_err(result)) goto done;
+
+  const EVP_MD *md = crypto_algorithm_hash(js, algorithm);
+  if ((kind == CRYPTO_KEY_RSA_PSS || kind == CRYPTO_KEY_RSA_OAEP) && !md) {
+    result = crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+    goto done;
+  }
+
+  key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_PUBLIC);
+  if (!key) { result = Ant_Error_CreateOutOfMemory(js); goto done; }
+  key->extractable = js_truthy(js, extractable);
+  key->usages = usage_mask;
+
+  if (crypto_name_is(kty, kty_len, "RSA")) {
+    if (kind == CRYPTO_KEY_ECDSA || kind == CRYPTO_KEY_ECDH) {
+      crypto_key_free(key);
+      result = crypto_dom_exception_error(js, "JWK kty does not match algorithm", "DataError");
+      goto done;
+    }
+    result = crypto_import_rsa_jwk(js, jwk, key, md);
+  } else if (crypto_name_is(kty, kty_len, "EC")) {
+    if (kind != CRYPTO_KEY_ECDSA && kind != CRYPTO_KEY_ECDH) {
+      crypto_key_free(key);
+      result = crypto_dom_exception_error(js, "JWK kty does not match algorithm", "DataError");
+      goto done;
+    }
+    result = crypto_import_ec_jwk(js, jwk, key, md);
+  } else {
+    result = crypto_dom_exception_error(js, "Unsupported JWK kty", "NotSupportedError");
+  }
+  if (is_err(result)) { crypto_key_free(key); goto done; }
+
+  result = crypto_check_asym_usages(js, key->kind, key->key_type, usage_mask);
+  if (is_err(result)) { crypto_key_free(key); goto done; }
+  if (kind == CRYPTO_KEY_RSA_PSS) {
+    ant_value_t salt = is_object_type(algorithm) ? js_get(js, algorithm, "saltLength") : Ant_Value_Undefined;
+    if (is_err(salt)) { crypto_key_free(key); result = salt; goto done; }
+    if (vtype(salt) == kTypeNumber) {
+      double value = Ant_Value_AsNumberUnchecked(salt);
+      if (value < 0 || value > 65535 || floor(value) != value) {
+        crypto_key_free(key);
+        result = js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA-PSS saltLength");
+        goto done;
+      }
+      key->salt_len = (uint32_t)value;
+    } else if (md) {
+      key->salt_len = mbedtls_md_get_size(mbedtls_md_info_from_type(crypto_md_type(md)));
+    }
+  }
+
+  result = crypto_make_asym_key_object(js, key, key->bits);
+  key = NULL;
+
+done:
+  crypto_key_free(key);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_export_rsa_jwk(ant_t *js, ant_crypto_key_t *key) {
+  ant_value_t jwk = Ant_Object_CreateBare(js);
+  if (is_err(jwk)) return jwk;
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, jwk);
+  ant_value_t result = Ant_Value_Undefined;
+
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*(mbedtls_pk_context *)key->pkey);
+  mbedtls_mpi n, e, d, p, q, dp, dq, qp;
+  mbedtls_mpi_init(&n); mbedtls_mpi_init(&e); mbedtls_mpi_init(&d);
+  mbedtls_mpi_init(&p); mbedtls_mpi_init(&q); mbedtls_mpi_init(&dp);
+  mbedtls_mpi_init(&dq); mbedtls_mpi_init(&qp);
+  if (mbedtls_rsa_export(rsa, &n, key->key_type == CRYPTO_KEY_TYPE_PRIVATE ? &p : NULL,
+                         key->key_type == CRYPTO_KEY_TYPE_PRIVATE ? &q : NULL,
+                         key->key_type == CRYPTO_KEY_TYPE_PRIVATE ? &d : NULL, &e) != 0) {
+    result = js_mkerr(js, "RSA JWK export failed");
+    goto rsa_done;
+  }
+  if (key->key_type == CRYPTO_KEY_TYPE_PRIVATE &&
+      mbedtls_rsa_export_crt(rsa, &dp, &dq, &qp) != 0) {
+    result = js_mkerr(js, "RSA JWK export failed");
+    goto rsa_done;
+  }
+
+#define JWK_MPI(name, mpi) do { \
+    result = crypto_jwk_mpi_prop(js, jwk, name, mpi); \
+    if (is_err(result)) goto rsa_done; \
+  } while (0)
+
+  result = crypto_jwk_prop(js, jwk, "kty", Ant_String_FromLiteral(js, "RSA"));
+  if (is_err(result)) goto rsa_done;
+  JWK_MPI("n", &n);
+  JWK_MPI("e", &e);
+  if (key->key_type == CRYPTO_KEY_TYPE_PRIVATE) {
+    JWK_MPI("d", &d);
+    JWK_MPI("p", &p);
+    JWK_MPI("q", &q);
+    JWK_MPI("dp", &dp);
+    JWK_MPI("dq", &dq);
+    JWK_MPI("qi", &qp);
+  }
+#undef JWK_MPI
+
+rsa_done:
+  mbedtls_mpi_free(&n); mbedtls_mpi_free(&e); mbedtls_mpi_free(&d);
+  mbedtls_mpi_free(&p); mbedtls_mpi_free(&q); mbedtls_mpi_free(&dp);
+  mbedtls_mpi_free(&dq); mbedtls_mpi_free(&qp);
+  if (!is_err(result)) result = jwk;
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_export_ec_jwk(ant_t *js, ant_crypto_key_t *key) {
+  ant_value_t jwk = Ant_Object_CreateBare(js);
+  if (is_err(jwk)) return jwk;
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, jwk);
+  ant_value_t result = Ant_Value_Undefined;
+
+  const crypto_curve_info_t *curve = crypto_curve_by_name(key->curve, strlen(key->curve));
+  if (!curve) { result = js_mkerr(js, "Unsupported EC curve"); goto ec_done; }
+
+  mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*(mbedtls_pk_context *)key->pkey);
+  uint8_t *point = malloc(1 + 2 * curve->coords);
+  if (!point) { result = Ant_Error_CreateOutOfMemory(js); goto ec_done; }
+  size_t point_len = 0;
+  if (mbedtls_ecp_point_write_binary(&ec->grp, &ec->Q, MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                     &point_len, point, 1 + 2 * curve->coords) != 0 ||
+      point_len != 1 + 2 * curve->coords) {
+    free(point);
+    result = js_mkerr(js, "EC JWK export failed");
+    goto ec_done;
+  }
+
+  result = crypto_jwk_prop(js, jwk, "kty", Ant_String_FromLiteral(js, "EC"));
+  if (is_err(result)) { free(point); goto ec_done; }
+  result = crypto_jwk_prop(js, jwk, "crv", js_mkstr(js, curve->name, strlen(curve->name)));
+  if (is_err(result)) { free(point); goto ec_done; }
+  result = crypto_jwk_b64_prop(js, jwk, "x", point + 1, curve->coords);
+  if (is_err(result)) { free(point); goto ec_done; }
+  result = crypto_jwk_b64_prop(js, jwk, "y", point + 1 + curve->coords, curve->coords);
+  free(point);
+  if (is_err(result)) goto ec_done;
+
+  if (key->key_type == CRYPTO_KEY_TYPE_PRIVATE) {
+    size_t d_len = mbedtls_mpi_size(&ec->d);
+    uint8_t *d = malloc(d_len ? d_len : 1);
+    if (!d) { result = Ant_Error_CreateOutOfMemory(js); goto ec_done; }
+    int rc = mbedtls_mpi_write_binary(&ec->d, d, d_len);
+    if (rc == 0) result = crypto_jwk_b64_prop(js, jwk, "d", d, d_len);
+    else result = js_mkerr(js, "EC JWK export failed");
+    free(d);
+  }
+
+ec_done:
+  if (!is_err(result)) result = jwk;
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_export_jwk_key(ant_t *js, ant_crypto_key_t *key) {
+  if (key->kind == CRYPTO_KEY_RSA_PKCS1 || key->kind == CRYPTO_KEY_RSA_PSS ||
+      key->kind == CRYPTO_KEY_RSA_OAEP)
+    return crypto_export_rsa_jwk(js, key);
+  if (key->kind == CRYPTO_KEY_ECDSA || key->kind == CRYPTO_KEY_ECDH)
+    return crypto_export_ec_jwk(js, key);
+  return js_mkerr(js, "JWK export is not supported for this key");
+}
+
+static uint8_t *crypto_asn1_tlv(
+  uint8_t *out, uint8_t tag, const uint8_t *value, size_t len
+) {
+  *out++ = tag;
+  if (len < 128) {
+    *out++ = (uint8_t)len;
+  } else {
+    uint8_t encoded[sizeof(size_t)];
+    size_t count = 0;
+    size_t remaining = len;
+    while (remaining) {
+      encoded[count++] = (uint8_t)(remaining & 0xff);
+      remaining >>= 8;
+    }
+    *out++ = (uint8_t)(0x80 | count);
+    for (size_t i = count; i > 0; i--) *out++ = encoded[i - 1];
+  }
+  if (len) memcpy(out, value, len);
+  return out + len;
+}
+
+static ant_value_t crypto_export_der_key(ant_t *js, bool private_key, ant_crypto_key_t *key) {
+  uint8_t buffer[16384];
+  int len = private_key
+    ? mbedtls_pk_write_key_der((mbedtls_pk_context *)key->pkey, buffer, sizeof(buffer))
+    : mbedtls_pk_write_pubkey_der((mbedtls_pk_context *)key->pkey, buffer, sizeof(buffer));
+  if (len <= 0) return js_mkerr(js, "DER key export failed");
+  const uint8_t *data = buffer + sizeof(buffer) - (size_t)len;
+
+  if (!private_key)
+    return create_arraybuffer_copy(js, data, (size_t)len);
+
+  /* WebCrypto pkcs8 requires PrivateKeyInfo, not the raw PKCS#1/SEC1 key that
+   * mbedtls_pk_write_key_der emits. Wrap it with the matching algorithm OID. */
+  uint8_t inner[16384];
+  uint8_t *p = crypto_asn1_tlv(inner, 0x02, (const uint8_t *)"\0", 1);
+
+  uint8_t algorithm[128];
+  uint8_t *a = algorithm;
+  bool ec_kind = key->kind == CRYPTO_KEY_ECDSA || key->kind == CRYPTO_KEY_ECDH;
+  if (ec_kind) {
+    const crypto_curve_info_t *curve = crypto_curve_by_name(key->curve, strlen(key->curve));
+    if (!curve || curve->oid_len > sizeof(algorithm) - sizeof(k_oid_ec_public_key) - 4)
+      return js_mkerr(js, "EC PKCS#8 export failed");
+    a = crypto_asn1_tlv(a, 0x06, k_oid_ec_public_key, sizeof(k_oid_ec_public_key));
+    a = crypto_asn1_tlv(a, 0x06, curve->oid, curve->oid_len);
+  } else {
+    if (sizeof(k_oid_rsa_encryption) + 4 > sizeof(algorithm))
+      return js_mkerr(js, "RSA PKCS#8 export failed");
+    a = crypto_asn1_tlv(a, 0x06, k_oid_rsa_encryption, sizeof(k_oid_rsa_encryption));
+    a = crypto_asn1_tlv(a, 0x05, NULL, 0);
+  }
+  p = crypto_asn1_tlv(p, 0x30, algorithm, (size_t)(a - algorithm));
+  p = crypto_asn1_tlv(p, 0x04, data, (size_t)len);
+
+  uint8_t output[16384];
+  uint8_t *end = crypto_asn1_tlv(output, 0x30, inner, (size_t)(p - inner));
+  if ((size_t)(end - output) > sizeof(output))
+    return js_mkerr(js, "PKCS#8 export failed");
+  return create_arraybuffer_copy(js, output, (size_t)(end - output));
+}
+
+static uint32_t crypto_pss_salt_length(ant_t *js, ant_value_t algorithm, const EVP_MD *md) {
+  ant_value_t salt = is_object_type(algorithm) ? js_get(js, algorithm, "saltLength") : Ant_Value_Undefined;
+  if (is_err(salt) || vtype(salt) != kTypeNumber) {
+    if (md) return (uint32_t)mbedtls_md_get_size(mbedtls_md_info_from_type(crypto_md_type(md)));
+    return 0;
+  }
+  double value = Ant_Value_AsNumberUnchecked(salt);
+  if (value < 0 || value > 65535 || floor(value) != value) return UINT32_MAX;
+  return (uint32_t)value;
+}
+
+static ant_value_t crypto_import_der_key(
+  ant_t *js, bool private_key, const uint8_t *bytes, size_t len,
+  ant_value_t algorithm, ant_value_t extractable, ant_value_t usages
+) {
+  ant_value_t name_val = crypto_subtle_get_algorithm_name(js, algorithm);
+  if (is_err(name_val)) return name_val;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_val, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (!kind)
+    return crypto_dom_exception_error(js, "Unsupported DER key algorithm", "NotSupportedError");
+
+  uint8_t usage_mask = 0;
+  ant_value_t result = crypto_read_key_usages(js, usages, &usage_mask);
+  if (is_err(result)) return result;
+
+  ant_crypto_key_t *key = crypto_key_alloc_asym_uninitialized(kind,
+    private_key ? CRYPTO_KEY_TYPE_PRIVATE : CRYPTO_KEY_TYPE_PUBLIC);
+  if (!key) return Ant_Error_CreateOutOfMemory(js);
+  key->extractable = js_truthy(js, extractable);
+  key->usages = usage_mask;
+
+  mbedtls_pk_context *pk = (mbedtls_pk_context *)key->pkey;
+  int rc = private_key
+    ? mbedtls_pk_parse_key(pk, bytes, len, NULL, 0, NULL, NULL)
+    : mbedtls_pk_parse_public_key(pk, bytes, len);
+  if (rc != 0) {
+    crypto_key_free(key);
+    return crypto_dom_exception_error(js, "Invalid DER key data", "DataError");
+  }
+
+  mbedtls_pk_type_t pk_type = mbedtls_pk_get_type(pk);
+  bool rsa_kind = kind == CRYPTO_KEY_RSA_PKCS1 || kind == CRYPTO_KEY_RSA_PSS ||
+    kind == CRYPTO_KEY_RSA_OAEP;
+  bool ec_kind = kind == CRYPTO_KEY_ECDSA || kind == CRYPTO_KEY_ECDH;
+  if ((rsa_kind && pk_type != MBEDTLS_PK_RSA) ||
+      (ec_kind && (pk_type != MBEDTLS_PK_ECKEY && pk_type != MBEDTLS_PK_ECKEY_DH))) {
+    crypto_key_free(key);
+    return crypto_dom_exception_error(js, "DER key does not match algorithm", "DataError");
+  }
+
+  const EVP_MD *md = crypto_algorithm_hash(js, algorithm);
+  if ((kind == CRYPTO_KEY_RSA_PSS || kind == CRYPTO_KEY_RSA_OAEP) && !md) {
+    crypto_key_free(key);
+    return crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+  }
+  key->md = md;
+  key->bits = (uint32_t)mbedtls_pk_get_bitlen(pk);
+
+  if (ec_kind) {
+    mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*pk);
+    const crypto_curve_info_t *curve = crypto_curve_by_id(ec->grp.id);
+    if (!curve) {
+      crypto_key_free(key);
+      return crypto_dom_exception_error(js, "Unsupported EC curve", "NotSupportedError");
+    }
+    memcpy(key->curve, curve->name, strlen(curve->name) + 1);
+    key->bits = (uint32_t)(curve->coords * 8u);
+  } else if (rsa_kind) {
+    mbedtls_rsa_set_padding(mbedtls_pk_rsa(*pk), MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
+  }
+
+  if (kind == CRYPTO_KEY_RSA_PSS) {
+    key->salt_len = crypto_pss_salt_length(js, algorithm, md);
+    if (key->salt_len == UINT32_MAX) {
+      crypto_key_free(key);
+      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA-PSS saltLength");
+    }
+  }
+
+  result = crypto_check_asym_usages(js, kind, key->key_type, usage_mask);
+  if (is_err(result)) { crypto_key_free(key); return result; }
+  result = crypto_make_asym_key_object(js, key, key->bits);
+  return result;
+}
+
+static ant_value_t crypto_hash_input_bytes(
+  ant_t *js, ant_value_t data, const EVP_MD *md,
+  uint8_t *out, size_t out_cap, size_t *out_len
+) {
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (!buffer_source_get_bytes(js, data, &bytes, &len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Signature input must be a BufferSource");
+  unsigned int digest_len = 0;
+  if (EVP_Digest(bytes, len, out, &digest_len, md, NULL) != 1 || digest_len > out_cap)
+    return js_mkerr(js, "Digest failed");
+  *out_len = digest_len;
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_asym_sign(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm, ant_value_t data
+) {
+  const EVP_MD *md = crypto_algorithm_hash(js, algorithm);
+  if (!md) md = key->md;
+  if (!md)
+    return crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+  if (key->key_type != CRYPTO_KEY_TYPE_PRIVATE || key->pkey == NULL)
+    return crypto_dom_exception_error(js, "Signing requires a private key", "InvalidAccessError");
+
+  uint8_t digest[EVP_MAX_MD_SIZE];
+  size_t digest_len = 0;
+  ant_value_t result = crypto_hash_input_bytes(js, data, md, digest, sizeof(digest), &digest_len);
+  if (is_err(result)) return result;
+
+  mbedtls_pk_context *pk = (mbedtls_pk_context *)key->pkey;
+  mbedtls_md_type_t md_type = crypto_md_type(md);
+  uint8_t signature[MBEDTLS_MPI_MAX_SIZE];
+  size_t sig_len = 0;
+
+  if (key->kind == CRYPTO_KEY_RSA_PKCS1) {
+    if (mbedtls_pk_sign(pk, md_type, digest, digest_len, signature, sizeof(signature),
+                        &sig_len, crypto_mbedtls_rng, NULL) != 0)
+      return js_mkerr(js, "RSA signing failed");
+  } else if (key->kind == CRYPTO_KEY_RSA_PSS) {
+    uint32_t salt = crypto_pss_salt_length(js, algorithm, md);
+    if (salt == UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA-PSS saltLength");
+    mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*pk);
+    mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V21, md_type);
+    if (mbedtls_rsa_rsassa_pss_sign_ext(rsa, crypto_mbedtls_rng, NULL, md_type,
+                                        (unsigned)digest_len, digest, (int)salt, signature) != 0)
+      return js_mkerr(js, "RSA-PSS signing failed");
+    sig_len = mbedtls_rsa_get_len(rsa);
+  } else if (key->kind == CRYPTO_KEY_ECDSA) {
+    const crypto_curve_info_t *curve = crypto_curve_by_name(key->curve, strlen(key->curve));
+    if (!curve) return js_mkerr(js, "Unsupported EC curve");
+    mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*pk);
+    mbedtls_mpi r, s;
+    mbedtls_mpi_init(&r); mbedtls_mpi_init(&s);
+    int rc = mbedtls_ecdsa_sign(&ec->grp, &r, &s, &ec->d, digest, digest_len,
+                                crypto_mbedtls_rng, NULL);
+    if (rc == 0) rc = mbedtls_mpi_write_binary(&r, signature, curve->coords);
+    if (rc == 0) rc = mbedtls_mpi_write_binary(&s, signature + curve->coords, curve->coords);
+    mbedtls_mpi_free(&r); mbedtls_mpi_free(&s);
+    if (rc != 0) return js_mkerr(js, "ECDSA signing failed");
+    sig_len = 2 * curve->coords;
+  } else {
+    return crypto_dom_exception_error(js, "Unsupported signing algorithm", "NotSupportedError");
+  }
+
+  return create_arraybuffer_copy(js, signature, sig_len);
+}
+
+static ant_value_t crypto_asym_verify(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm,
+  ant_value_t signature_value, ant_value_t data
+) {
+  const EVP_MD *md = crypto_algorithm_hash(js, algorithm);
+  if (!md) md = key->md;
+  if (!md)
+    return crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+  if (key->pkey == NULL)
+    return crypto_dom_exception_error(js, "Verification requires a CryptoKey", "InvalidAccessError");
+
+  const uint8_t *sig = NULL;
+  size_t sig_len = 0;
+  if (!buffer_source_get_bytes(js, signature_value, &sig, &sig_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "signature must be a BufferSource");
+
+  uint8_t digest[EVP_MAX_MD_SIZE];
+  size_t digest_len = 0;
+  ant_value_t result = crypto_hash_input_bytes(js, data, md, digest, sizeof(digest), &digest_len);
+  if (is_err(result)) return result;
+
+  mbedtls_pk_context *pk = (mbedtls_pk_context *)key->pkey;
+  mbedtls_md_type_t md_type = crypto_md_type(md);
+  int ok = -1;
+
+  if (key->kind == CRYPTO_KEY_RSA_PKCS1) {
+    ok = mbedtls_pk_verify(pk, md_type, digest, digest_len, sig, sig_len);
+  } else if (key->kind == CRYPTO_KEY_RSA_PSS) {
+    uint32_t salt = crypto_pss_salt_length(js, algorithm, md);
+    if (salt == UINT32_MAX) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA-PSS saltLength");
+    mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*pk);
+    mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V21, md_type);
+    if (sig_len == mbedtls_rsa_get_len(rsa))
+      ok = mbedtls_rsa_rsassa_pss_verify_ext(rsa, md_type, (unsigned)digest_len, digest,
+                                             md_type, (int)salt, sig);
+  } else if (key->kind == CRYPTO_KEY_ECDSA) {
+    const crypto_curve_info_t *curve = crypto_curve_by_name(key->curve, strlen(key->curve));
+    if (!curve) return js_mkerr(js, "Unsupported EC curve");
+    if (sig_len == 2 * curve->coords) {
+      mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*pk);
+      mbedtls_mpi r, s;
+      mbedtls_mpi_init(&r); mbedtls_mpi_init(&s);
+      if (mbedtls_mpi_read_binary(&r, sig, curve->coords) == 0 &&
+          mbedtls_mpi_read_binary(&s, sig + curve->coords, curve->coords) == 0)
+        ok = mbedtls_ecdsa_verify(&ec->grp, digest, digest_len, &ec->Q, &r, &s);
+      mbedtls_mpi_free(&r); mbedtls_mpi_free(&s);
+    }
+  } else {
+    return crypto_dom_exception_error(js, "Unsupported verification algorithm", "NotSupportedError");
+  }
+
+  return Ant_Value_FromBool(ok == 0);
+}
+
+static ant_value_t crypto_asym_encrypt(
+  ant_t *js, bool encrypt, ant_crypto_key_t *key,
+  ant_value_t algorithm, ant_value_t data
+) {
+  if (key->kind != CRYPTO_KEY_RSA_OAEP || key->pkey == NULL)
+    return crypto_dom_exception_error(js, "RSA-OAEP requires an RSA key", "NotSupportedError");
+  if (!key->md)
+    return crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+
+  const uint8_t *input = NULL;
+  size_t input_len = 0;
+  if (!buffer_source_get_bytes(js, data, &input, &input_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RSA-OAEP data must be a BufferSource");
+
+  ant_value_t label_val = is_object_type(algorithm) ? js_get(js, algorithm, "label") : Ant_Value_Undefined;
+  if (is_err(label_val)) return label_val;
+  const uint8_t *label = NULL;
+  size_t label_len = 0;
+  if (vtype(label_val) != kTypeUndefined && vtype(label_val) != kTypeNull &&
+      !buffer_source_get_bytes(js, label_val, &label, &label_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RSA-OAEP label must be a BufferSource");
+
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*(mbedtls_pk_context *)key->pkey);
+  mbedtls_md_type_t md_type = crypto_md_type(key->md);
+  mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V21, md_type);
+  size_t rsa_len = mbedtls_rsa_get_len(rsa);
+
+  uint8_t *out = malloc(encrypt ? rsa_len : rsa_len ? rsa_len : 1);
+  if (!out) return Ant_Error_CreateOutOfMemory(js);
+  int rc;
+  size_t out_len = rsa_len;
+  if (encrypt) {
+    rc = mbedtls_rsa_rsaes_oaep_encrypt(rsa, crypto_mbedtls_rng, NULL, label, label_len,
+                                        input_len, input, out);
+  } else {
+    rc = mbedtls_rsa_rsaes_oaep_decrypt(rsa, crypto_mbedtls_rng, NULL, label, label_len,
+                                        &out_len, input, out, rsa_len);
+  }
+  if (rc != 0) { free(out); return js_mkerr(js, "RSA-OAEP operation failed"); }
+  ant_value_t result = create_arraybuffer_copy(js, out, out_len);
+  free(out);
+  return result;
+}
+
+static ant_value_t crypto_nist_kw(
+  ant_t *js, bool wrap, ant_crypto_key_t *key,
+  const uint8_t *input, size_t input_len, uint8_t **output, size_t *output_len
+) {
+  *output = NULL;
+  *output_len = 0;
+  if (key->kind != CRYPTO_KEY_AES_KW || (key->key_len != 16 && key->key_len != 24 && key->key_len != 32))
+    return crypto_dom_exception_error(js, "AES-KW requires a 128, 192, or 256-bit key", "InvalidAccessError");
+
+  mbedtls_nist_kw_context ctx;
+  mbedtls_nist_kw_init(&ctx);
+  int rc = mbedtls_nist_kw_setkey(&ctx, MBEDTLS_CIPHER_ID_AES, key->key,
+                                  (unsigned)(key->key_len * 8), wrap ? 1 : 0);
+  size_t capacity = wrap ? input_len + 8 : input_len > 8 ? input_len - 8 : 0;
+  uint8_t *out = malloc(capacity ? capacity : 1);
+  if (rc == 0 && out) {
+    rc = wrap
+      ? mbedtls_nist_kw_wrap(&ctx, MBEDTLS_KW_MODE_KW, input, input_len, out, output_len, capacity)
+      : mbedtls_nist_kw_unwrap(&ctx, MBEDTLS_KW_MODE_KW, input, input_len, out, output_len, capacity);
+  } else rc = -1;
+  mbedtls_nist_kw_free(&ctx);
+  if (rc != 0) { free(out); return js_mkerr(js, "AES-KW operation failed"); }
+  *output = out;
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_ecdh_derive_bits(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm
+) {
+  if (key->kind != CRYPTO_KEY_ECDH || key->key_type != CRYPTO_KEY_TYPE_PRIVATE)
+    return crypto_dom_exception_error(js, "ECDH requires a private key", "InvalidAccessError");
+
+  const crypto_curve_info_t *curve = crypto_curve_by_name(key->curve, strlen(key->curve));
+  if (!curve) return js_mkerr(js, "Unsupported EC curve");
+  ant_value_t peer_val = is_object_type(algorithm) ? js_get(js, algorithm, "public") : Ant_Value_Undefined;
+  if (is_err(peer_val)) return peer_val;
+
+  mbedtls_ecp_point peer;
+  mbedtls_ecp_point_init(&peer);
+  ant_crypto_key_t *peer_key = crypto_require_key(peer_val);
+  int rc = -1;
+  if (peer_key && peer_key->kind == CRYPTO_KEY_ECDH && peer_key->pkey) {
+    mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*(mbedtls_pk_context *)peer_key->pkey);
+    if (ec->grp.id == ((mbedtls_ecp_keypair *)mbedtls_pk_ec(
+          *(mbedtls_pk_context *)key->pkey))->grp.id)
+      rc = mbedtls_ecp_copy(&peer, &ec->Q);
+  } else {
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    if (buffer_source_get_bytes(js, peer_val, &bytes, &len)) {
+      mbedtls_ecp_keypair *local = mbedtls_pk_ec(*(mbedtls_pk_context *)key->pkey);
+      rc = mbedtls_ecp_point_read_binary(&local->grp, &peer, bytes, len);
+    }
+  }
+  if (rc != 0) {
+    mbedtls_ecp_point_free(&peer);
+    return crypto_dom_exception_error(js, "Invalid ECDH public key", "DataError");
+  }
+
+  mbedtls_ecp_keypair *local = mbedtls_pk_ec(*(mbedtls_pk_context *)key->pkey);
+  mbedtls_mpi shared;
+  mbedtls_mpi_init(&shared);
+  uint8_t *out = malloc(curve->coords);
+  if (!out) { mbedtls_mpi_free(&shared); mbedtls_ecp_point_free(&peer); return Ant_Error_CreateOutOfMemory(js); }
+  rc = mbedtls_ecdh_compute_shared(&local->grp, &shared, &peer, &local->d,
+                                   crypto_mbedtls_rng, NULL);
+  if (rc == 0) rc = mbedtls_mpi_write_binary(&shared, out, curve->coords);
+  mbedtls_mpi_free(&shared);
+  mbedtls_ecp_point_free(&peer);
+  if (rc != 0) { free(out); return js_mkerr(js, "ECDH failed"); }
+  ant_value_t result = create_arraybuffer_copy(js, out, curve->coords);
+  free(out);
+  return result;
+}
+
+static uint32_t crypto_read_number_member(ant_t *js, ant_value_t object,
+                                          const char *name, uint32_t fallback) {
+  if (!is_object_type(object)) return fallback;
+  ant_value_t value = js_get(js, object, name);
+  if (is_err(value) || vtype(value) != kTypeNumber) return fallback;
+  double number = Ant_Value_AsNumberUnchecked(value);
+  if (!isfinite(number) || number < 0 || number > UINT32_MAX || floor(number) != number)
+    return UINT32_MAX;
+  return (uint32_t)number;
+}
+
+static uint32_t crypto_read_public_exponent(ant_t *js, ant_value_t algorithm) {
+  ant_value_t value = is_object_type(algorithm)
+    ? js_get(js, algorithm, "publicExponent") : Ant_Value_Undefined;
+  if (is_err(value) || vtype(value) == kTypeUndefined) return 65537;
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (!buffer_source_get_bytes(js, value, &bytes, &len) || len == 0 || len > 4) return 0;
+  uint32_t exponent = 0;
+  for (size_t i = 0; i < len; i++) exponent = (exponent << 8) | bytes[i];
+  return exponent;
+}
+
+static ant_value_t crypto_generate_asym_key(
+  ant_t *js, ant_value_t algorithm, ant_value_t extractable_value, ant_value_t usages_value
+) {
+  ant_value_t name_val = crypto_subtle_get_algorithm_name(js, algorithm);
+  if (is_err(name_val)) return name_val;
+  size_t name_len = 0;
+  const char *name = js_getstr(js, name_val, &name_len);
+  ant_crypto_key_kind_t kind = crypto_asym_kind_from_name(name, name_len);
+  if (!kind)
+    return crypto_dom_exception_error(js, "Unsupported generateKey algorithm", "NotSupportedError");
+
+  uint8_t usages = 0;
+  ant_value_t result = crypto_read_key_usages(js, usages_value, &usages);
+  if (is_err(result)) return result;
+  bool extractable = js_truthy(js, extractable_value);
+
+  const EVP_MD *md = crypto_algorithm_hash(js, algorithm);
+  if ((kind == CRYPTO_KEY_RSA_PSS || kind == CRYPTO_KEY_RSA_OAEP) && !md)
+    return crypto_dom_exception_error(js, "Algorithm.hash is required", "NotSupportedError");
+
+  if (kind == CRYPTO_KEY_AES_KW) {
+    result = crypto_check_asym_usages(js, kind, CRYPTO_KEY_TYPE_SECRET, usages);
+    if (is_err(result)) return result;
+    uint32_t bits = crypto_read_number_member(js, algorithm, "length", 128);
+    if (bits == UINT32_MAX || (bits != 128 && bits != 192 && bits != 256))
+      return crypto_dom_exception_error(js, "AES-KW key length must be 128, 192, or 256", "OperationError");
+    ant_crypto_key_t *key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_SECRET);
+    if (!key) return Ant_Error_CreateOutOfMemory(js);
+    key->key_len = bits / 8u;
+    key->usages = usages;
+    key->extractable = extractable;
+    if (crypto_fill_random(key->key, key->key_len) != 0) {
+      crypto_key_free(key);
+      return js_mkerr(js, "Key generation failed");
+    }
+    return crypto_make_asym_key_object(js, key, bits);
+  }
+
+  uint8_t private_usages = 0;
+  uint8_t public_usages = 0;
+  uint8_t allowed_usages = 0;
+  switch (kind) {
+    case CRYPTO_KEY_RSA_PKCS1:
+    case CRYPTO_KEY_RSA_PSS:
+    case CRYPTO_KEY_ECDSA:
+      allowed_usages = CRYPTO_KEY_USAGE_SIGN | CRYPTO_KEY_USAGE_VERIFY;
+      private_usages = usages & CRYPTO_KEY_USAGE_SIGN;
+      public_usages = usages & CRYPTO_KEY_USAGE_VERIFY;
+      break;
+    case CRYPTO_KEY_RSA_OAEP:
+      allowed_usages = CRYPTO_KEY_USAGE_ENCRYPT | CRYPTO_KEY_USAGE_DECRYPT |
+        CRYPTO_KEY_USAGE_WRAP_KEY | CRYPTO_KEY_USAGE_UNWRAP_KEY;
+      private_usages = usages & (CRYPTO_KEY_USAGE_DECRYPT | CRYPTO_KEY_USAGE_UNWRAP_KEY);
+      public_usages = usages & (CRYPTO_KEY_USAGE_ENCRYPT | CRYPTO_KEY_USAGE_WRAP_KEY);
+      break;
+    case CRYPTO_KEY_ECDH:
+      allowed_usages = CRYPTO_KEY_USAGE_DERIVE_KEY | CRYPTO_KEY_USAGE_DERIVE_BITS;
+      private_usages = usages & allowed_usages;
+      break;
+    default:
+      break;
+  }
+  if (usages & ~allowed_usages)
+    return crypto_dom_exception_error(js, "Unsupported key usage for algorithm", "SyntaxError");
+
+  if (kind == CRYPTO_KEY_ECDSA || kind == CRYPTO_KEY_ECDH) {
+    ant_value_t curve_val = is_object_type(algorithm)
+      ? js_get(js, algorithm, "namedCurve") : Ant_Value_Undefined;
+    if (is_err(curve_val)) return curve_val;
+    size_t curve_len = 0;
+    const char *curve_name = vtype(curve_val) == kTypeString
+      ? js_getstr(js, curve_val, &curve_len) : NULL;
+    const crypto_curve_info_t *curve = crypto_curve_by_name(curve_name, curve_len);
+    if (!curve)
+      return crypto_dom_exception_error(js, "Unsupported namedCurve", "NotSupportedError");
+
+    ant_crypto_key_t *private_key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_PRIVATE);
+    ant_crypto_key_t *public_key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_PUBLIC);
+    if (!private_key || !public_key) {
+      crypto_key_free(private_key); crypto_key_free(public_key);
+      return Ant_Error_CreateOutOfMemory(js);
+    }
+    mbedtls_ecp_keypair *ec = mbedtls_pk_ec(*(mbedtls_pk_context *)private_key->pkey);
+    if (mbedtls_ecp_group_load(&ec->grp, curve->id) != 0 ||
+        mbedtls_ecp_gen_keypair(&ec->grp, &ec->d, &ec->Q, crypto_mbedtls_rng, NULL) != 0) {
+      crypto_key_free(private_key); crypto_key_free(public_key);
+      return js_mkerr(js, "EC key generation failed");
+    }
+    mbedtls_ecp_keypair *pub = mbedtls_pk_ec(*(mbedtls_pk_context *)public_key->pkey);
+    if (mbedtls_ecp_group_load(&pub->grp, curve->id) != 0 ||
+        mbedtls_ecp_copy(&pub->Q, &ec->Q) != 0) {
+      crypto_key_free(private_key); crypto_key_free(public_key);
+      return js_mkerr(js, "EC key generation failed");
+    }
+    private_key->usages = private_usages;
+    private_key->extractable = extractable;
+    private_key->md = md;
+    private_key->bits = (uint32_t)(curve->coords * 8u);
+    memcpy(private_key->curve, curve->name, strlen(curve->name) + 1);
+    public_key->usages = public_usages;
+    public_key->extractable = extractable;
+    public_key->md = md;
+    public_key->bits = private_key->bits;
+    memcpy(public_key->curve, curve->name, strlen(curve->name) + 1);
+    return crypto_make_key_pair(js, private_key, private_key->bits, public_key, public_key->bits);
+  }
+
+  uint32_t bits = crypto_read_number_member(js, algorithm, "modulusLength", 2048);
+  uint32_t exponent = crypto_read_public_exponent(js, algorithm);
+  if (bits == UINT32_MAX || bits < 512 || bits > 16384 || exponent < 3 || exponent > UINT32_MAX) {
+    return (bits == UINT32_MAX || exponent == 0)
+      ? js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA key parameters")
+      : crypto_dom_exception_error(js, "Invalid RSA key parameters", "OperationError");
+  }
+
+  ant_crypto_key_t *private_key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_PRIVATE);
+  ant_crypto_key_t *public_key = crypto_key_alloc_asym(kind, CRYPTO_KEY_TYPE_PUBLIC);
+  if (!private_key || !public_key) {
+    crypto_key_free(private_key); crypto_key_free(public_key);
+    return Ant_Error_CreateOutOfMemory(js);
+  }
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(*(mbedtls_pk_context *)private_key->pkey);
+  if (mbedtls_rsa_gen_key(rsa, crypto_mbedtls_rng, NULL, (unsigned)bits, (int)exponent) != 0) {
+    crypto_key_free(private_key); crypto_key_free(public_key);
+    return js_mkerr(js, "RSA key generation failed");
+  }
+  mbedtls_rsa_context *pub = mbedtls_pk_rsa(*(mbedtls_pk_context *)public_key->pkey);
+  mbedtls_mpi n, e;
+  mbedtls_mpi_init(&n); mbedtls_mpi_init(&e);
+  int rc = mbedtls_rsa_export(rsa, &n, NULL, NULL, NULL, &e);
+  if (rc == 0) rc = mbedtls_rsa_import(pub, &n, NULL, NULL, NULL, &e);
+  if (rc == 0) rc = mbedtls_rsa_complete(pub);
+  mbedtls_mpi_free(&n); mbedtls_mpi_free(&e);
+  if (rc != 0) {
+    crypto_key_free(private_key); crypto_key_free(public_key);
+    return js_mkerr(js, "RSA public key derivation failed");
+  }
+  mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
+  mbedtls_rsa_set_padding(pub, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
+
+  private_key->usages = private_usages;
+  private_key->extractable = extractable;
+  private_key->md = md;
+  private_key->bits = bits;
+  public_key->usages = public_usages;
+  public_key->extractable = extractable;
+  public_key->md = md;
+  public_key->bits = bits;
+  if (kind == CRYPTO_KEY_RSA_PSS) {
+    uint32_t salt = crypto_pss_salt_length(js, algorithm, md);
+    if (salt == UINT32_MAX) {
+      crypto_key_free(private_key); crypto_key_free(public_key);
+      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid RSA-PSS saltLength");
+    }
+    private_key->salt_len = salt;
+    public_key->salt_len = salt;
+  }
+  return crypto_make_key_pair(js, private_key, bits, public_key, bits);
+}
+
+static ant_value_t crypto_export_serialized_key(ant_t *js, ant_value_t format,
+                                                ant_value_t key_value, uint8_t **out, size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+  ant_value_t format_string = crypto_webcrypto_string(js, format);
+  if (is_err(format_string)) return format_string;
+  ant_value_t args[2] = { format_string, key_value };
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, format_string);
+  GC_ROOT_PIN(js, key_value);
+  ant_value_t exported = crypto_subtle_export_key_impl(
+    js, args, 2, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined
+  );
+  if (is_err(exported)) { GC_ROOT_RESTORE(js, mark); return exported; }
+  GC_ROOT_PIN(js, exported);
+
+  size_t len = 0;
+  const char *name = js_getstr(js, format_string, &len);
+  if (name && len == 3 && memcmp(name, "jwk", 3) == 0) {
+    const char *text = NULL;
+    size_t text_len = 0;
+    ant_value_t error = crypto_jwk_to_text(js, exported, &text, &text_len);
+    if (is_err(error)) { GC_ROOT_RESTORE(js, mark); return error; }
+    *out = malloc(text_len ? text_len : 1);
+    if (!*out) { GC_ROOT_RESTORE(js, mark); return Ant_Error_CreateOutOfMemory(js); }
+    memcpy(*out, text, text_len);
+    *out_len = text_len;
+  } else {
+    const uint8_t *bytes = NULL;
+    if (!buffer_source_get_bytes(js, exported, &bytes, out_len)) {
+      GC_ROOT_RESTORE(js, mark);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Key serialization is not a BufferSource");
+    }
+    *out = malloc(*out_len ? *out_len : 1);
+    if (!*out) { GC_ROOT_RESTORE(js, mark); return Ant_Error_CreateOutOfMemory(js); }
+    memcpy(*out, bytes, *out_len);
+  }
+  GC_ROOT_RESTORE(js, mark);
+  return Ant_Value_Undefined;
+}
+
+static ant_value_t crypto_wrap_key_impl(ant_params_t) {
+  if (nargs < 4)
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+      "subtle.wrapKey requires format, key, wrappingKey, and wrapAlgorithm");
+  ant_crypto_key_t *key = crypto_require_key(args[1]);
+  if (!key) return js_mkerr_typed(js, JS_ERR_TYPE, "wrapKey requires a CryptoKey");
+  if (!key->extractable)
+    return crypto_dom_exception_error(js, "CryptoKey is not extractable", "InvalidAccessError");
+
+  uint8_t *serialized = NULL;
+  size_t serialized_len = 0;
+  ant_value_t result = crypto_export_serialized_key(js, args[0], args[1], &serialized, &serialized_len);
+  if (is_err(result)) return result;
+
+  ant_crypto_key_t *wrapping_key = crypto_require_key(args[2]);
+  if (!wrapping_key)
+    { free(serialized); return js_mkerr_typed(js, JS_ERR_TYPE, "wrappingKey must be a CryptoKey"); }
+
+  uint8_t *wrapped = NULL;
+  size_t wrapped_len = 0;
+  if (wrapping_key->kind == CRYPTO_KEY_AES_KW) {
+    if (!(wrapping_key->usages & CRYPTO_KEY_USAGE_WRAP_KEY))
+      { free(serialized); return crypto_dom_exception_error(js, "CryptoKey does not permit wrapKey", "InvalidAccessError"); }
+    result = crypto_nist_kw(js, true, wrapping_key, serialized, serialized_len, &wrapped, &wrapped_len);
+  } else if (wrapping_key->kind == CRYPTO_KEY_RSA_OAEP) {
+    if (!(wrapping_key->usages & CRYPTO_KEY_USAGE_WRAP_KEY))
+      { free(serialized); return crypto_dom_exception_error(js, "CryptoKey does not permit wrapKey", "InvalidAccessError"); }
+    ant_value_t encrypted = crypto_asym_encrypt(js, true, wrapping_key, args[3],
+      crypto_make_buffer(js, serialized, serialized_len));
+    if (!is_err(encrypted)) {
+      const uint8_t *bytes = NULL;
+      if (buffer_source_get_bytes(js, encrypted, &bytes, &wrapped_len)) {
+        wrapped = malloc(wrapped_len ? wrapped_len : 1);
+        if (wrapped) memcpy(wrapped, bytes, wrapped_len);
+        else result = Ant_Error_CreateOutOfMemory(js);
+      } else result = js_mkerr(js, "RSA-OAEP wrap failed");
+    } else result = encrypted;
+  } else {
+    result = crypto_dom_exception_error(js, "Unsupported wrapKey algorithm", "NotSupportedError");
+  }
+  free(serialized);
+  if (is_err(result)) { free(wrapped); return result; }
+  result = create_arraybuffer_copy(js, wrapped, wrapped_len);
+  free(wrapped);
+  return result;
+}
+
+static ant_value_t crypto_unwrap_key_impl(ant_params_t) {
+  if (nargs < 7)
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+      "subtle.unwrapKey requires format, wrappedKey, unwrappingKey, unwrapAlgorithm, unwrappedKeyAlgorithm, extractable, and keyUsages");
+  const uint8_t *wrapped = NULL;
+  size_t wrapped_len = 0;
+  if (!buffer_source_get_bytes(js, args[1], &wrapped, &wrapped_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "wrappedKey must be a BufferSource");
+
+  ant_crypto_key_t *unwrapping_key = crypto_require_key(args[2]);
+  if (!unwrapping_key)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "unwrappingKey must be a CryptoKey");
+  if (!(unwrapping_key->usages & CRYPTO_KEY_USAGE_UNWRAP_KEY))
+    return crypto_dom_exception_error(js, "CryptoKey does not permit unwrapKey", "InvalidAccessError");
+
+  uint8_t *plaintext = NULL;
+  size_t plaintext_len = 0;
+  ant_value_t result = Ant_Value_Undefined;
+  if (unwrapping_key->kind == CRYPTO_KEY_AES_KW) {
+    result = crypto_nist_kw(js, false, unwrapping_key, wrapped, wrapped_len, &plaintext, &plaintext_len);
+  } else if (unwrapping_key->kind == CRYPTO_KEY_RSA_OAEP) {
+    ant_value_t decrypted = crypto_asym_encrypt(js, false, unwrapping_key, args[3], args[1]);
+    if (!is_err(decrypted)) {
+      const uint8_t *bytes = NULL;
+      if (buffer_source_get_bytes(js, decrypted, &bytes, &plaintext_len)) {
+        plaintext = malloc(plaintext_len ? plaintext_len : 1);
+        if (plaintext) memcpy(plaintext, bytes, plaintext_len);
+        else result = Ant_Error_CreateOutOfMemory(js);
+      } else result = js_mkerr(js, "RSA-OAEP unwrap failed");
+    } else result = decrypted;
+  } else {
+    result = crypto_dom_exception_error(js, "Unsupported unwrapKey algorithm", "NotSupportedError");
+  }
+  if (is_err(result)) { free(plaintext); return result; }
+
+  ant_value_t format = crypto_webcrypto_string(js, args[0]);
+  if (is_err(format)) { free(plaintext); return format; }
+  size_t format_len = 0;
+  const char *format_name = js_getstr(js, format, &format_len);
+
+  GC_ROOT_SAVE(mark, js);
+  GC_ROOT_PIN(js, format);
+  GC_ROOT_PIN(js, args[4]);
+  GC_ROOT_PIN(js, args[5]);
+  GC_ROOT_PIN(js, args[6]);
+  if (format_name && format_len == 3 && memcmp(format_name, "jwk", 3) == 0) {
+    ant_value_t jwk = crypto_jwk_from_bytes(js, plaintext, plaintext_len);
+    if (is_err(jwk)) result = jwk;
+    else result = crypto_import_jwk_key(js, jwk, args[4], args[5], args[6]);
+  } else {
+    ant_value_t data = create_arraybuffer_copy(js, plaintext, plaintext_len);
+    if (is_err(data)) result = data;
+    else {
+      GC_ROOT_PIN(js, data);
+      ant_value_t import_args[5] = { format, data, args[4], args[5], args[6] };
+      result = crypto_subtle_import_key_impl(
+        js, import_args, 5, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined
+      );
+    }
+  }
+  free(plaintext);
+  GC_ROOT_RESTORE(js, mark);
+  return result;
+}
+
+static ant_value_t crypto_derive_key_impl(ant_params_t) {
+  if (nargs < 5)
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+      "subtle.deriveKey requires algorithm, baseKey, derivedKeyAlgorithm, extractable, and keyUsages");
+  uint32_t bits = crypto_read_number_member(js, args[2], "length", 0);
+  if (!bits || bits == UINT32_MAX || bits % 8u != 0)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "derivedKeyAlgorithm.length must be a positive multiple of 8");
+
+  uint8_t *derived = NULL;
+  size_t derived_len = 0;
+  ant_value_t result = Ant_Value_Undefined;
+  if (crypto_algorithm_is(js, args[0], "PBKDF2")) {
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+    ant_value_t bits_value = Ant_Value_FromNumber((double)bits);
+    ant_value_t derive_args[3] = { args[0], args[1], bits_value };
+    GC_ROOT_SAVE(mark, js);
+    GC_ROOT_PIN(js, bits_value);
+    ant_value_t bits_result = crypto_subtle_derive_bits_impl(
+      js, derive_args, 3, Ant_Value_Undefined, Ant_Value_Undefined, Ant_Value_Undefined
+    );
+    GC_ROOT_RESTORE(js, mark);
+    if (is_err(bits_result)) return bits_result;
+    const uint8_t *bytes = NULL;
+    if (!buffer_source_get_bytes(js, bits_result, &bytes, &derived_len))
+      return js_mkerr(js, "PBKDF2 deriveKey failed");
+    derived = malloc(derived_len ? derived_len : 1);
+    if (!derived) return Ant_Error_CreateOutOfMemory(js);
+    memcpy(derived, bytes, derived_len);
+  } else if (crypto_algorithm_is(js, args[0], "ECDH")) {
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+    ant_value_t bits_result = crypto_ecdh_derive_bits(js, crypto_require_key(args[1]), args[0]);
+    if (is_err(bits_result)) return bits_result;
+    const uint8_t *bytes = NULL;
+    if (!buffer_source_get_bytes(js, bits_result, &bytes, &derived_len))
+      return js_mkerr(js, "ECDH deriveKey failed");
+    derived = malloc(derived_len ? derived_len : 1);
+    if (!derived) return Ant_Error_CreateOutOfMemory(js);
+    memcpy(derived, bytes, derived_len);
+  } else {
+    if (Ant_Exception_Pending(js)) return Ant_Exception_Current(js);
+    return crypto_dom_exception_error(js, "Unsupported deriveKey algorithm", "NotSupportedError");
+  }
+
+  result = crypto_import_raw_key(js, derived, derived_len, args[2], args[3], args[4]);
+  free(derived);
+  return result;
 }
 
 #else /* ANT_MBEDTLS_TLS_BACKEND */
@@ -3252,7 +5114,19 @@ typedef enum {
   CRYPTO_KEY_HMAC = 1,
   CRYPTO_KEY_AES_GCM,
   CRYPTO_KEY_PBKDF2,
+  CRYPTO_KEY_AES_KW,
+  CRYPTO_KEY_RSA_PKCS1,
+  CRYPTO_KEY_RSA_PSS,
+  CRYPTO_KEY_RSA_OAEP,
+  CRYPTO_KEY_ECDSA,
+  CRYPTO_KEY_ECDH,
 } ant_crypto_key_kind_t;
+
+typedef enum {
+  CRYPTO_KEY_TYPE_SECRET = 0,
+  CRYPTO_KEY_TYPE_PUBLIC,
+  CRYPTO_KEY_TYPE_PRIVATE,
+} ant_crypto_key_type_t;
 
 typedef enum {
   CRYPTO_KEY_USAGE_ENCRYPT     = 1u << 0,
@@ -3271,8 +5145,68 @@ typedef struct {
   uint8_t *key;
   size_t key_len;
   uint8_t usages;
+  uint8_t key_type;
   bool extractable;
+  void *pkey;          /* mbedTLS mbedtls_pk_context* for asymmetric keys. */
+  uint32_t bits;       /* RSA modulus length or EC curve size. */
+  uint32_t salt_len;   /* RSA-PSS salt length in bytes. */
+  char curve[16];      /* Named curve for EC keys. */
 } ant_crypto_key_t;
+
+#ifdef ANT_MBEDTLS_TLS_BACKEND
+/* Asymmetric WebCrypto helpers are defined near the end of this backend so the
+ * shared secret-key logic above can stay compact. */
+static ant_crypto_key_kind_t crypto_asym_kind_from_name(const char *name, size_t len);
+static bool crypto_is_asym_kind(ant_crypto_key_kind_t kind);
+static ant_value_t crypto_check_asym_usages(
+  ant_t *js, ant_crypto_key_kind_t kind, uint8_t key_type, uint8_t usages
+);
+static ant_value_t crypto_make_key_pair(
+  ant_t *js, ant_crypto_key_t *private_key, uint32_t private_bits,
+  ant_crypto_key_t *public_key, uint32_t public_bits
+);
+static ant_value_t crypto_make_asym_key_object(
+  ant_t *js, ant_crypto_key_t *key, uint32_t bits
+);
+static ant_value_t crypto_import_raw_key(
+  ant_t *js, const uint8_t *bytes, size_t len, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_import_jwk_key(
+  ant_t *js, ant_value_t jwk, ant_value_t algorithm,
+  ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_import_der_key(
+  ant_t *js, bool private_key, const uint8_t *bytes, size_t len,
+  ant_value_t algorithm, ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_export_jwk_key(ant_t *js, ant_crypto_key_t *key);
+static ant_value_t crypto_export_der_key(ant_t *js, bool private_key, ant_crypto_key_t *key);
+static ant_value_t crypto_asym_sign(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm, ant_value_t data
+);
+static ant_value_t crypto_asym_verify(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm,
+  ant_value_t signature, ant_value_t data
+);
+static ant_value_t crypto_asym_encrypt(
+  ant_t *js, bool encrypt, ant_crypto_key_t *key,
+  ant_value_t algorithm, ant_value_t data
+);
+static ant_value_t crypto_nist_kw(
+  ant_t *js, bool wrap, ant_crypto_key_t *key,
+  const uint8_t *input, size_t input_len, uint8_t **output, size_t *output_len
+);
+static ant_value_t crypto_ecdh_derive_bits(
+  ant_t *js, ant_crypto_key_t *key, ant_value_t algorithm
+);
+static ant_value_t crypto_generate_asym_key(
+  ant_t *js, ant_value_t algorithm, ant_value_t extractable, ant_value_t usages
+);
+static ant_value_t crypto_wrap_key_impl(ant_params_t);
+static ant_value_t crypto_unwrap_key_impl(ant_params_t);
+static ant_value_t crypto_derive_key_impl(ant_params_t);
+#endif
 
 typedef struct {
   EVP_CIPHER_CTX *ctx;

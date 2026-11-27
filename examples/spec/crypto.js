@@ -131,4 +131,87 @@ await testRejects('HMAC unsupported hash', () => crypto.subtle.generateKey({ nam
 await testRejects('exportKey invalid format', () => crypto.subtle.exportKey('RAW', shortKey), 'TypeError');
 await testRejects('exportKey unsupported format', () => crypto.subtle.exportKey('jwk', shortKey), 'NotSupportedError');
 
+// Asymmetric WebCrypto parity (mbedTLS backend).
+const rsaAlgorithm = {
+  name: 'RSASSA-PKCS1-v1_5',
+  modulusLength: 1024,
+  publicExponent: new Uint8Array([1, 0, 1]),
+  hash: 'SHA-256'
+};
+const rsaPair = await crypto.subtle.generateKey(rsaAlgorithm, true, ['sign', 'verify']);
+test('RSA private usages', rsaPair.privateKey.usages.join(','), 'sign');
+test('RSA public usages', rsaPair.publicKey.usages.join(','), 'verify');
+test('RSA algorithm hash', rsaPair.publicKey.algorithm.hash.name, 'SHA-256');
+const rsaSignature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', rsaPair.privateKey, message);
+test('RSA signature length', rsaSignature.byteLength, 128);
+test('RSA verify', await crypto.subtle.verify('RSASSA-PKCS1-v1_5', rsaPair.publicKey, rsaSignature, message), true);
+test('RSA verify changed message', await crypto.subtle.verify('RSASSA-PKCS1-v1_5', rsaPair.publicKey, rsaSignature, new Uint8Array([9])), false);
+
+const rsaJwk = await crypto.subtle.exportKey('jwk', rsaPair.publicKey);
+test('RSA JWK kty', rsaJwk.kty, 'RSA');
+test('RSA JWK has n', typeof rsaJwk.n, 'string');
+test('RSA JWK has e', typeof rsaJwk.e, 'string');
+const rsaJwkKey = await crypto.subtle.importKey('jwk', rsaJwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['verify']);
+test('RSA JWK verify', await crypto.subtle.verify('RSASSA-PKCS1-v1_5', rsaJwkKey, rsaSignature, message), true);
+const rsaSpki = await crypto.subtle.exportKey('spki', rsaPair.publicKey);
+const rsaSpkiKey = await crypto.subtle.importKey('spki', rsaSpki, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['verify']);
+test('RSA SPKI verify', await crypto.subtle.verify('RSASSA-PKCS1-v1_5', rsaSpkiKey, rsaSignature, message), true);
+const rsaPkcs8 = await crypto.subtle.exportKey('pkcs8', rsaPair.privateKey);
+const rsaPkcs8Key = await crypto.subtle.importKey('pkcs8', rsaPkcs8, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['sign']);
+const rsaPkcs8Signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', rsaPkcs8Key, message);
+test('RSA PKCS#8 sign', await crypto.subtle.verify('RSASSA-PKCS1-v1_5', rsaPair.publicKey, rsaPkcs8Signature, message), true);
+
+const pssPair = await crypto.subtle.generateKey(
+  { name: 'RSA-PSS', modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256', saltLength: 32 },
+  true, ['sign', 'verify']
+);
+const pssSignature = await crypto.subtle.sign({ name: 'RSA-PSS', saltLength: 32 }, pssPair.privateKey, message);
+test('RSA-PSS verify', await crypto.subtle.verify({ name: 'RSA-PSS', saltLength: 32 }, pssPair.publicKey, pssSignature, message), true);
+test('RSA-PSS salt mismatch', await crypto.subtle.verify({ name: 'RSA-PSS', saltLength: 16 }, pssPair.publicKey, pssSignature, message), false);
+
+const oaepPair = await crypto.subtle.generateKey(
+  { name: 'RSA-OAEP', modulusLength: 1024, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+  true, ['encrypt', 'decrypt', 'wrapKey', 'unwrapKey']
+);
+test('RSA-OAEP public usages', oaepPair.publicKey.usages.join(','), 'encrypt,wrapKey');
+test('RSA-OAEP private usages', oaepPair.privateKey.usages.join(','), 'decrypt,unwrapKey');
+const oaepEncrypted = await crypto.subtle.encrypt('RSA-OAEP', oaepPair.publicKey, message);
+const oaepDecrypted = await crypto.subtle.decrypt('RSA-OAEP', oaepPair.privateKey, oaepEncrypted);
+testDeep('RSA-OAEP round trip', Array.from(new Uint8Array(oaepDecrypted)), Array.from(message));
+
+const ecPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+test('ECDSA named curve', ecPair.privateKey.algorithm.namedCurve, 'P-256');
+const ecSignature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, ecPair.privateKey, message);
+test('ECDSA signature length', ecSignature.byteLength, 64);
+test('ECDSA verify', await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, ecPair.publicKey, ecSignature, message), true);
+const ecJwk = await crypto.subtle.exportKey('jwk', ecPair.publicKey);
+test('ECDSA JWK crv', ecJwk.crv, 'P-256');
+const ecJwkKey = await crypto.subtle.importKey('jwk', ecJwk, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']);
+test('ECDSA JWK verify', await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, ecJwkKey, ecSignature, message), true);
+const ecSpki = await crypto.subtle.exportKey('spki', ecPair.publicKey);
+const ecSpkiKey = await crypto.subtle.importKey('spki', ecSpki, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['verify']);
+test('ECDSA SPKI verify', await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, ecSpkiKey, ecSignature, message), true);
+const ecPkcs8 = await crypto.subtle.exportKey('pkcs8', ecPair.privateKey);
+const ecPkcs8Key = await crypto.subtle.importKey('pkcs8', ecPkcs8, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+const ecPkcs8Signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, ecPkcs8Key, message);
+test('ECDSA PKCS#8 sign', await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, ecPair.publicKey, ecPkcs8Signature, message), true);
+
+const ecdhAlice = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits', 'deriveKey']);
+const ecdhBob = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits', 'deriveKey']);
+const ecdhAliceBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ecdhBob.publicKey }, ecdhAlice.privateKey, 256);
+const ecdhBobBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ecdhAlice.publicKey }, ecdhBob.privateKey, 256);
+testDeep('ECDH shared bits', Array.from(new Uint8Array(ecdhAliceBits)), Array.from(new Uint8Array(ecdhBobBits)));
+
+const kwKey = await crypto.subtle.generateKey({ name: 'AES-KW', length: 128 }, true, ['wrapKey', 'unwrapKey']);
+test('AES-KW name', kwKey.algorithm.name, 'AES-KW');
+const aesForWrap = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, ['encrypt']);
+const wrappedKey = await crypto.subtle.wrapKey('raw', aesForWrap, kwKey, 'AES-KW');
+test('AES-KW wrapped length', wrappedKey.byteLength, 24);
+const unwrappedKey = await crypto.subtle.unwrapKey('raw', wrappedKey, kwKey, 'AES-KW', { name: 'AES-GCM', length: 128 }, true, ['encrypt']);
+testDeep(
+  'AES-KW round trip',
+  Array.from(new Uint8Array(await crypto.subtle.exportKey('raw', unwrappedKey))),
+  Array.from(new Uint8Array(await crypto.subtle.exportKey('raw', aesForWrap)))
+);
+
 summary();
