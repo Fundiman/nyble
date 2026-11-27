@@ -251,9 +251,14 @@ Current supported local target: **Windows x86_64, mingw-w64 ABI**. The CLI/REPL 
 
 ```bash
 git submodule update --init --recursive
-git -C third_party/ant checkout ant    # submodule tracks the `ant` branch = Ant master + local patches
+# The `ant` branch is our Ant-master-line tracking branch (it carries the
+# mbedTLS/TLS/crypto/WS and node-compat patches). Do not use the submodule's
+# local `master` branch here; that is legacy NybleJS history.
+git -C third_party/ant switch -C ant --track nyble/ant
 git submodule status
 ```
+
+`.gitmodules` records `branch = ant`, so `git submodule update --remote` follows `nyble/ant` — the Ant master line with our patches — not a release tag or the stale local `master`. The checked-out submodule commit is recorded explicitly by the superproject.
 
 Do not download release artifacts. If the submodule is empty, the first command is the fix.
 
@@ -864,7 +869,7 @@ The v0 engine lacked the modern language surface and web APIs the browser needs.
 No. `nyblejs-v0.7-final` / `339bfbe` preserves it, and the legacy sources are still in the tree for reference. They are simply not linked into v1.
 
 **Why a submodule instead of vendoring Ant?**
-To track Ant's `master` line (via the `ant` branch) with real commits, patches, and provenance — and to avoid release downloads.
+To track Ant's `master` line with real commits, patches, and provenance — and to avoid release downloads. The tracked branch is `ant` (`nyble/ant` upstream), which is the Ant master line with our mbedTLS/TLS/crypto/WS and node-compat patches. The submodule's local `master` is stale NybleJS history and is intentionally not the tracking branch; keep a local `ant` branch tracking `nyble/ant` as shown in [Get the Ant submodule](#get-the-ant-submodule).
 
 **Why mbedTLS and not BoringSSL?**
 BoringSSL is explicitly out of scope. The mbedTLS/tlsuv backend builds with Zig/mingw-w64 and lets us keep verification fail-closed while patching Windows CA-store loading.
