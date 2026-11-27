@@ -2,3 +2,15 @@
 	path = third_party/ant
 	url = https://github.com/Fundiman/nyble.git
 	branch = ant
+[submodule "lexbor"]
+	path = third_party/lexbor
+	url = https://github.com/lexbor/lexbor.git
+	branch = master
+[submodule "tint"]
+	path = third_party/tint
+	url = https://dawn.googlesource.com/tint.git
+	branch = main
+[submodule "mesa"]
+	path = third_party/mesa
+	url = https://gitlab.freedesktop.org/mesa/mesa.git
+	branch = main

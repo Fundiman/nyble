@@ -21,19 +21,30 @@ Nyble
 │       ├── wasm-micro-runtime    WebAssembly
 │       ├── skim                  TypeScript stripping
 │       └── upm                   Ant package manager
+└── NybleR                        native renderer (C/C++)
+    ├── Lexbor                    HTML/DOM/CSSOM (local source submodule)
+    ├── Tint                      WGSL compiler (local source submodule)
+    │   └── SPIR-V                portable shader IR
+    └── Mesa                      OpenGL/EGL + Vulkan backend (local source submodule)
+        ├── llvmpipe              software OpenGL fallback
+        └── lavapipe              software Vulkan fallback
 ```
 
 Build systems and tools (also a dependency view, not a directory layout):
 
 ```text
 Nyble build
-├── git + submodules              source checkout and Ant master-line tracking
+├── git + submodules              source checkout, Ant master line, NybleR local deps
 ├── GNU make                      NybleJS driver (njs, embed examples, ant-posix)
 ├── Meson + Ninja                 Ant configure/build, including the embed dist
 │   ├── CMake                     vendored mbedTLS subproject
 │   ├── pkg-config                libant.pc include/link flags for hosts
 │   ├── Node.js 22 + npm          Ant generated built-in JS headers
 │   └── Python 3 + pip            Meson installation on POSIX CI
+├── CMake + Ninja                 NybleR local dependency builds (Lexbor, Tint)
+├── Meson                         NybleR local Mesa build
+├── depot_tools + gclient         pinned Tint dependency sync
+├── LLVM tooling                  Mesa llvmpipe/lavapipe shader compilation
 ├── clang / clang++               native POSIX and mingw-w64 Windows compiler
 ├── Zig 0.16.0                    optional mingw-w64 driver (USE_ZIG=1)
 ├── lld                           Windows static link driver
@@ -43,7 +54,7 @@ Nyble build
     └── windows-latest + MSYS2 UCRT64 libant-mingw64 artifact + njs smoke
 ```
 
-No MSVC, BoringSSL, WSL, or [Rust](# "An extremely bloated (at compile-time), overhyped, programming language mimicking the feel of low-level programming languages while providing a JavaScript-like node_modules storage-heavy experience for masochists.") bootstrap is required. Node compatibility is opt-in; the web/WinterTC surface is the baseline.
+No MSVC, BoringSSL, WSL, or [Rust](# "An extremely bloated (at compile-time), overhyped, programming language mimicking the feel of low-level programming languages while providing a JavaScript-like node_modules storage-heavy experience for masochists.") bootstrap is required. NybleR builds Lexbor, Tint, and Mesa locally from source instead of consuming system renderer libraries. Node compatibility is opt-in; the web/WinterTC surface is the baseline.
 
 # Frequently Asked Questions (FAQ)
 
