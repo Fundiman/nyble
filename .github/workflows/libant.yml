@@ -52,11 +52,8 @@ jobs:
             git
             jq
 
-      - name: Add mbedTLS backend to Ant
-        # Upstream still hard-wires BoringSSL; this patch adds the
-        # tls_backend=mbedtls option using tlsuv's existing mbedTLS engine.
-        run: git apply --directory=third_party/ant patches/libant-mbedtls.patch
-
+      # The Ant fork already carries the mbedTLS backend, so no source
+      # patch is applied here.
       - name: Fetch vendored subprojects (no BoringSSL)
         # Meson's parallel downloader deadlocks on Windows NTFS
         # (OSError errno 36); serial (-j 1) is slow but reliable.
