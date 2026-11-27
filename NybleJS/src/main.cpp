@@ -432,6 +432,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::string source;
+    std::vector<std::string> history;
+    size_t historyIndex = 0;
 
     auto rerender = [&](const std::string& prompt, const std::string& buf, size_t cursor) {
         std::cout << "\r" << prompt;
@@ -529,8 +531,22 @@ int main(int argc, char* argv[]) {
                 } else if (ch == 23) { // Ctrl+W - delete word back
                     while (cursorPos > 0 && lineBuffer[cursorPos - 1] == ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
                     while (cursorPos > 0 && lineBuffer[cursorPos - 1] != ' ') { lineBuffer.erase(cursorPos - 1, 1); cursorPos--; }
-                } else if (ch == 0x100) { // Up
-                } else if (ch == 0x101) { // Down
+                } else if (ch == 0x100) { // Up - previous history entry
+                    if (!history.empty() && historyIndex > 0) {
+                        historyIndex--;
+                        lineBuffer = history[historyIndex];
+                        cursorPos = lineBuffer.size();
+                    }
+                } else if (ch == 0x101) { // Down - next history entry
+                    if (!history.empty() && historyIndex + 1 < history.size()) {
+                        historyIndex++;
+                        lineBuffer = history[historyIndex];
+                        cursorPos = lineBuffer.size();
+                    } else if (!history.empty()) {
+                        historyIndex = history.size();
+                        lineBuffer.clear();
+                        cursorPos = 0;
+                    }
                 } else if (ch == 0x102) { // Left
                     if (cursorPos > 0) cursorPos--;
                 } else if (ch == 0x103) { // Right
@@ -557,6 +573,11 @@ int main(int argc, char* argv[]) {
         }
 
         if (lineBuffer.empty() && source.empty()) continue;
+
+        if (!piped && !lineBuffer.empty()) {
+            history.push_back(lineBuffer);
+            historyIndex = history.size();
+        }
 
         source += lineBuffer + "\n";
 
