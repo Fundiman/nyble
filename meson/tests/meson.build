@@ -225,6 +225,12 @@ http_protocols_test = executable(
 )
 test('http-protocols', http_protocols_test)
 
+test(
+  'embed-header-closure',
+  python,
+  args: files(meson.project_source_root() / 'meson' / 'embed_test.py'),
+)
+
 if get_option('tls_backend') == 'boringssl'
   executable(
     'tlsuv-boringssl-smoke',

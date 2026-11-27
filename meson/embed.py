@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 ARCHIVE_SUFFIXES = ('.a', '.lib')
+HEADER_SUFFIXES = ('.h', '.hh', '.hpp', '.hxx')
 UNDEFINED_TYPES = {'U', 'u', 'w', 'v'}
 
 
@@ -89,7 +90,9 @@ def header_closure(build_root, section, headers):
     if token.endswith(':'):
       continue
     path = os.path.realpath(os.path.join(build_root, token))
-    if os.path.isfile(path):
+    # Darwin clang adds SDKSettings.json to dependency output; only actual
+    # headers belong in the distributed include tree.
+    if os.path.isfile(path) and path.lower().endswith(HEADER_SUFFIXES):
       deps.add(path)
   return deps
 
