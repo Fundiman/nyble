@@ -11,8 +11,14 @@ static int check(int condition, const char *message) {
 
 int main(void) {
   static const char html[] =
-    "<div id='panel' style='width: 120px; height: 40px; background-color: #ff0000'>"
-    "<h1 style='color: blue; margin-top: 4px'>hello world</h1>"
+    "<style>"
+    "div { width: 200px; height: 60px; }"
+    "#panel { width: 160px !important; }"
+    "h1 { color: green; }"
+    "#title { color: red; }"
+    "</style>"
+    "<div id='panel' style='height: 40px; background-color: #ff0000'>"
+    "<h1 id='title' style='margin-top: 4px'>hello world</h1>"
     "</div>";
   NyblerDocument *document = NULL;
   NyblerLayout *layout = NULL;
@@ -75,14 +81,14 @@ int main(void) {
   }
 
   ok = check(nybler_layout_get_rect(layout, panels[0], &rect), "div rect") && ok;
-  ok = check(rect.width == 120.0f, "div width") && ok;
-  ok = check(rect.height == 40.0f, "div height") && ok;
+  ok = check(rect.width == 160.0f, "stylesheet important width") && ok;
+  ok = check(rect.height == 40.0f, "inline height") && ok;
   div_rect = rect;
 
   ok = check(nybler_layout_get_rect(layout, headings[0], &rect), "h1 rect") && ok;
   heading_rect = rect;
-  ok = check(rect.width == 120.0f, "h1 width") && ok;
-  ok = check(rect.y == 4.0f, "h1 margin-top") && ok;
+  ok = check(rect.width == 160.0f, "h1 width") && ok;
+  ok = check(rect.y == 20.0f, "h1 margin-top after style text") && ok;
   ok = check(rect.height == 16.0f, "h1 text height") && ok;
 
   if (!check(
@@ -100,7 +106,10 @@ int main(void) {
       continue;
     }
     found_text = 1;
-    ok = check(item->color.b == 1.0f && item->color.r == 0.0f, "blue text") && ok;
+    ok = check(
+      item->color.r == 1.0f && item->color.g == 0.0f && item->color.b == 0.0f,
+      "id selector color"
+    ) && ok;
     ok = check(item->rect.width == 88.0f, "text width") && ok;
   }
   ok = check(found_text, "hello world text item") && ok;

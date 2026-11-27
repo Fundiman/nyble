@@ -1,4 +1,5 @@
 #include "nybler/nybler.h"
+#include "internal.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -239,6 +240,76 @@ static LayoutStyle default_style(int is_body) {
   return style;
 }
 
+static void apply_declaration(
+  LayoutStyle *style,
+  const char *name,
+  size_t name_length,
+  const char *value,
+  size_t value_length,
+  const NyblerRect *parent
+) {
+  float parsed;
+
+  trim_slice(&name, &name_length);
+  trim_slice(&value, &value_length);
+  if (!name_length) return;
+
+  if (slice_equals_ci(name, name_length, "display")) {
+    if (slice_equals_ci(value, value_length, "none")) {
+      style->display_none = 1;
+    } else if (slice_equals_ci(value, value_length, "inline")) {
+      style->display_inline = 1;
+    }
+  } else if (slice_equals_ci(name, name_length, "width")) {
+    if (parse_length(value, value_length, parent->width, &parsed)) {
+      style->width = parsed;
+      style->has_width = 1;
+    }
+  } else if (slice_equals_ci(name, name_length, "height")) {
+    if (parse_length(value, value_length, parent->height, &parsed)) {
+      style->height = parsed;
+      style->has_height = 1;
+    }
+  } else if (slice_equals_ci(name, name_length, "background-color") ||
+             slice_equals_ci(name, name_length, "background")) {
+    style->background = parse_color(value, value_length);
+  } else if (slice_equals_ci(name, name_length, "color")) {
+    style->color = parse_color(value, value_length);
+  } else if (slice_equals_ci(name, name_length, "margin-left")) {
+    if (parse_length(value, value_length, parent->width, &parsed)) {
+      style->margin_left = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "margin-right")) {
+    if (parse_length(value, value_length, parent->width, &parsed)) {
+      style->margin_right = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "margin-top")) {
+    if (parse_length(value, value_length, parent->height, &parsed)) {
+      style->margin_top = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "margin-bottom")) {
+    if (parse_length(value, value_length, parent->height, &parsed)) {
+      style->margin_bottom = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "padding-left")) {
+    if (parse_length(value, value_length, parent->width, &parsed)) {
+      style->padding_left = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "padding-right")) {
+    if (parse_length(value, value_length, parent->width, &parsed)) {
+      style->padding_right = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "padding-top")) {
+    if (parse_length(value, value_length, parent->height, &parsed)) {
+      style->padding_top = parsed;
+    }
+  } else if (slice_equals_ci(name, name_length, "padding-bottom")) {
+    if (parse_length(value, value_length, parent->height, &parsed)) {
+      style->padding_bottom = parsed;
+    }
+  }
+}
+
 static void apply_inline_style(
   LayoutStyle *style,
   const char *data,
@@ -256,82 +327,70 @@ static void apply_inline_style(
     const char *declaration = data + start;
     size_t declaration_length = i - start;
     size_t colon = 0;
-    const char *name;
-    size_t name_length;
-    const char *value;
-    size_t value_length;
-    float parsed;
 
     trim_slice(&declaration, &declaration_length);
     while (colon < declaration_length && declaration[colon] != ':') colon++;
-    if (colon == declaration_length) {
-      start = i + 1;
-      continue;
-    }
-
-    name = declaration;
-    name_length = colon;
-    value = declaration + colon + 1;
-    value_length = declaration_length - colon - 1;
-    trim_slice(&name, &name_length);
-    trim_slice(&value, &value_length);
-
-    if (slice_equals_ci(name, name_length, "display")) {
-      if (slice_equals_ci(value, value_length, "none")) {
-        style->display_none = 1;
-      } else if (slice_equals_ci(value, value_length, "inline")) {
-        style->display_inline = 1;
-      }
-    } else if (slice_equals_ci(name, name_length, "width")) {
-      if (parse_length(value, value_length, parent->width, &parsed)) {
-        style->width = parsed;
-        style->has_width = 1;
-      }
-    } else if (slice_equals_ci(name, name_length, "height")) {
-      if (parse_length(value, value_length, parent->height, &parsed)) {
-        style->height = parsed;
-        style->has_height = 1;
-      }
-    } else if (slice_equals_ci(name, name_length, "background-color") ||
-               slice_equals_ci(name, name_length, "background")) {
-      style->background = parse_color(value, value_length);
-    } else if (slice_equals_ci(name, name_length, "color")) {
-      style->color = parse_color(value, value_length);
-    } else if (slice_equals_ci(name, name_length, "margin-left")) {
-      if (parse_length(value, value_length, parent->width, &parsed)) {
-        style->margin_left = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "margin-right")) {
-      if (parse_length(value, value_length, parent->width, &parsed)) {
-        style->margin_right = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "margin-top")) {
-      if (parse_length(value, value_length, parent->height, &parsed)) {
-        style->margin_top = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "margin-bottom")) {
-      if (parse_length(value, value_length, parent->height, &parsed)) {
-        style->margin_bottom = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "padding-left")) {
-      if (parse_length(value, value_length, parent->width, &parsed)) {
-        style->padding_left = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "padding-right")) {
-      if (parse_length(value, value_length, parent->width, &parsed)) {
-        style->padding_right = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "padding-top")) {
-      if (parse_length(value, value_length, parent->height, &parsed)) {
-        style->padding_top = parsed;
-      }
-    } else if (slice_equals_ci(name, name_length, "padding-bottom")) {
-      if (parse_length(value, value_length, parent->height, &parsed)) {
-        style->padding_bottom = parsed;
-      }
+    if (colon < declaration_length) {
+      apply_declaration(
+        style,
+        declaration,
+        colon,
+        declaration + colon + 1,
+        declaration_length - colon - 1,
+        parent
+      );
     }
 
     start = i + 1;
+  }
+}
+
+static void apply_computed_style(
+  NyblerDocument *document,
+  NyblerNode *node,
+  LayoutStyle *style,
+  const NyblerRect *parent
+) {
+  static const char *const properties[] = {
+    "display",
+    "width",
+    "height",
+    "background-color",
+    "background",
+    "color",
+    "margin-left",
+    "margin-right",
+    "margin-top",
+    "margin-bottom",
+    "padding-left",
+    "padding-right",
+    "padding-top",
+    "padding-bottom"
+  };
+  size_t i;
+
+  for (i = 0; i < sizeof(properties) / sizeof(properties[0]); i++) {
+    size_t name_length = strlen(properties[i]);
+    size_t value_length = 0;
+    char *value = nybler_internal_computed_style_value(
+      document,
+      node,
+      properties[i],
+      name_length,
+      &value_length
+    );
+
+    if (value) {
+      apply_declaration(
+        style,
+        properties[i],
+        name_length,
+        value,
+        value_length,
+        parent
+      );
+      nybler_internal_computed_style_value_release(value);
+    }
   }
 }
 
@@ -533,6 +592,7 @@ static void layout_element(
 
   style_value = nybler_node_get_attribute(node, "style", 5, &style_length);
   apply_inline_style(&style, style_value, style_length, parent);
+  apply_computed_style(context->layout->document, node, &style, parent);
   if (style.display_none) return;
 
   if (is_root) {

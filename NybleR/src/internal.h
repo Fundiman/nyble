@@ -155,4 +155,18 @@ char *nybler_internal_duplicate_string(const char *value);
 
 void nybler_internal_free_commands(NyblerCommand *commands, size_t count);
 
+/* Computed style bridge. document.c owns Lexbor's CSSOM and exposes serialized
+ * cascade winners to layout.c without leaking Lexbor types into the public API.
+ * Returned strings are heap allocated and must be released with the matching
+ * release function. */
+char *nybler_internal_computed_style_value(
+  NyblerDocument *document,
+  NyblerNode *node,
+  const char *property_name,
+  size_t property_length,
+  size_t *out_length
+);
+
+void nybler_internal_computed_style_value_release(char *value);
+
 #endif /* NYBLER_INTERNAL_H_ */

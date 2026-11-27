@@ -1,7 +1,10 @@
 #include "nybler/nybler.h"
+#include "internal.h"
 
+#include <lexbor/css/property.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
+#include <lexbor/style/style.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,27 +27,34 @@ NyblerResult nybler_document_parse(
   size_t length,
   NyblerDocument **out_document
 ) {
-  lxb_html_parser_t *parser;
+  lxb_status_t status;
   lxb_html_document_t *document;
   NyblerDocument *result;
 
   if (!html || !out_document) return NYBLER_ERROR_INVALID_ARGUMENT;
   *out_document = NULL;
 
-  parser = lxb_html_parser_create();
-  if (!parser) return NYBLER_ERROR_OUT_OF_MEMORY;
+  document = lxb_html_document_create();
+  if (!document) return NYBLER_ERROR_OUT_OF_MEMORY;
 
-  if (lxb_html_parser_init(parser) != LXB_STATUS_OK) {
-    lxb_html_parser_destroy(parser);
+  /* CSSOM must exist before parsing so Lexbor parses <style> text and style
+   * attributes, then applies collected stylesheets when parsing finishes. */
+  status = lxb_style_init(document);
+  if (status != LXB_STATUS_OK) {
+    lxb_html_document_destroy(document);
     return NYBLER_ERROR_OUT_OF_MEMORY;
   }
 
-  document = lxb_html_parse(parser, (const lxb_char_t *)html, length);
-  lxb_html_parser_destroy(parser);
-  if (!document) return NYBLER_ERROR_OUT_OF_MEMORY;
+  status = lxb_html_document_parse(document, (const lxb_char_t *)html, length);
+  if (status != LXB_STATUS_OK) {
+    lxb_style_destroy(document);
+    lxb_html_document_destroy(document);
+    return NYBLER_ERROR_UNSUPPORTED;
+  }
 
   result = (NyblerDocument *)malloc(sizeof(*result));
   if (!result) {
+    lxb_style_destroy(document);
     lxb_html_document_destroy(document);
     return NYBLER_ERROR_OUT_OF_MEMORY;
   }
@@ -56,6 +66,7 @@ NyblerResult nybler_document_parse(
 
 void nybler_document_release(NyblerDocument *document) {
   if (!document) return;
+  lxb_style_destroy(document->document);
   lxb_html_document_destroy(document->document);
   free(document);
 }
@@ -266,5 +277,107 @@ NyblerResult nybler_node_get_text_content(
 }
 
 void nybler_string_release(char *value) {
+  free(value);
+}
+
+typedef struct {
+  char *data;
+  size_t length;
+  size_t capacity;
+  int failed;
+} StyleBuffer;
+
+static lxb_status_t style_serialize_append(
+  const lxb_char_t *data,
+  size_t length,
+  void *context
+) {
+  StyleBuffer *buffer = (StyleBuffer *)context;
+  size_t required;
+  size_t capacity;
+  char *grown;
+
+  if (buffer->failed) return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+  if (length > (size_t)-1 - buffer->length - 1) {
+    buffer->failed = 1;
+    return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+  }
+
+  required = buffer->length + length + 1;
+  if (required <= buffer->capacity) {
+    memcpy(buffer->data + buffer->length, data, length);
+    buffer->length += length;
+    return LXB_STATUS_OK;
+  }
+
+  capacity = buffer->capacity ? buffer->capacity : 32;
+  while (capacity < required) {
+    if (capacity > (size_t)-1 / 2) {
+      capacity = required;
+      break;
+    }
+    capacity *= 2;
+  }
+
+  grown = (char *)realloc(buffer->data, capacity);
+  if (!grown) {
+    buffer->failed = 1;
+    return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+  }
+
+  buffer->data = grown;
+  buffer->capacity = capacity;
+  memcpy(buffer->data + buffer->length, data, length);
+  buffer->length += length;
+  return LXB_STATUS_OK;
+}
+
+char *nybler_internal_computed_style_value(
+  NyblerDocument *document,
+  NyblerNode *node,
+  const char *property_name,
+  size_t property_length,
+  size_t *out_length
+) {
+  const lxb_css_rule_declaration_t *declaration;
+  lxb_dom_node_t *dom_node;
+  lxb_status_t status;
+  StyleBuffer buffer;
+
+  if (out_length) *out_length = 0;
+  if (!document || !node || !property_name || !property_length) return NULL;
+
+  dom_node = nybler_dom_node(node);
+  if (lxb_dom_node_type(dom_node) != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+
+  declaration = lxb_dom_element_style_by_name(
+    lxb_dom_interface_element(dom_node),
+    (const lxb_char_t *)property_name,
+    property_length
+  );
+  if (!declaration) return NULL;
+
+  memset(&buffer, 0, sizeof(buffer));
+  status = lxb_css_property_serialize(
+    declaration->u.user,
+    declaration->type,
+    style_serialize_append,
+    &buffer
+  );
+  if (status != LXB_STATUS_OK || buffer.failed) {
+    free(buffer.data);
+    return NULL;
+  }
+
+  if (!buffer.data) {
+    buffer.data = (char *)malloc(1);
+    if (!buffer.data) return NULL;
+  }
+  buffer.data[buffer.length] = '\0';
+  if (out_length) *out_length = buffer.length;
+  return buffer.data;
+}
+
+void nybler_internal_computed_style_value_release(char *value) {
   free(value);
 }

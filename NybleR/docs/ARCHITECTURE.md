@@ -39,10 +39,13 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - queue submission and presentation
 
 Lexbor stays private behind `src/document.c`; callers never see Lexbor types or
-headers in `nybler.h`. `src/layout.c` consumes only the public DOM API, computes
-inline-style-driven block boxes and text runs, and produces borrowed
-display-list items. Display lists own copies of their text so they can outlive a
-layout object; layouts borrow their source document.
+headers in `nybler.h`. Document parsing initializes Lexbor's CSSOM before HTML
+parsing, so `<style>` text and `style` attributes are parsed and cascaded by
+Lexbor. `src/document.c` exposes only serialized computed values to
+`src/layout.c`, which consumes the public DOM API, computes block boxes and text
+runs, and produces borrowed display-list items. Display lists own copies of
+their text so they can outlive a layout object; layouts borrow their source
+document.
 
 `src/resources.c` implements the WebGPU-style object graph. Devices borrow
 adapters, resources and queues borrow devices, render pass encoders borrow their
