@@ -41,7 +41,14 @@ NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 
 MESA_ARGS ?= -Dllvm=enabled -Dgallium-drivers=swrast -Dvulkan-drivers=swrast -Dosmesa=enabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled
 
-.PHONY: all deps lexbor tint mesa nybler check clean
+DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+ifeq ($(OS),Windows_NT)
+LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
+else
+LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
+endif
+
+.PHONY: all deps lexbor tint mesa nybler dom-smoke check clean
 
 all: deps nybler
 
@@ -119,7 +126,13 @@ $(NYBLER_STAMP):
 	$(CMAKE) --install $(NYBLER_BUILD) --config $(BUILD_TYPE)
 	$(CMAKE) -E touch $@
 
-check: nybler
+dom-smoke: lexbor
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 -DLEXBOR_STATIC -I$(PREFIX)/include \
+		-o $(DOM_SMOKE_BIN) $(CURDIR)/tests/dom_smoke.c $(LEXBOR_LIB)
+	$(DOM_SMOKE_BIN)
+
+check: nybler dom-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:

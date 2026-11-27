@@ -49,6 +49,7 @@ Targets:
 - `mesa` — build local Mesa with software GL/Vulkan drivers
 - `deps` — all three local dependency builds
 - `nybler` — build the NybleR static library and C/C++ headers
+- `dom-smoke` — locally built Lexbor smoke test: `<h1> hello world </h1>` → `hello world`
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
