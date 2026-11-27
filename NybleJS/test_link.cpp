@@ -1,3 +1,6 @@
+// LEGACY v0.x embedding test. This uses the retired tree/VM API and does NOT
+// compile against v1's nyblejs.h. Kept for reference only; see
+// examples/embed_engine.cpp for the supported Ant-backed embed.
 #include <iostream>
 #include "src/nyblejs.h"
 

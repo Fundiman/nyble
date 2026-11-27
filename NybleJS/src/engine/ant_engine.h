@@ -10,7 +10,9 @@ namespace nyble {
 // One Engine == one Ant isolate == one JS global scope.
 class Engine {
 public:
-    Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0, bool nodeCompat = true);
+    // Node compat is OFF by default for embeddings (web-first). Pass true to
+    // opt into Buffer/fs/process/tty/events and node: module resolution.
+    Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0, bool nodeCompat = false);
     ~Engine();
 
     Engine(const Engine&) = delete;

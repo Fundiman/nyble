@@ -1,15 +1,7 @@
 #pragma once
 
-#include "value.h"
-#include "lexer.h"
-#include "ast.h"
-#include "parser.h"
-#include "env.h"
-#include "gc.h"
-#include "builtins.h"
-#include "interp.h"
-#include "bytecode.h"
-#include "compiler.h"
-#include "vm.h"
-#include "context.h"
-#include "cats.h"
+// NybleJS embedding header (Ant Silver backend).
+// Include this from C++ hosts, then compile/link NybleJS engine sources
+// (src/engine/* + src/main.cpp excluded) and libant.
+
+#include "engine/ant_engine.h"

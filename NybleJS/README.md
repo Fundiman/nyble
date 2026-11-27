@@ -1,310 +1,733 @@
-# NybleJS - Lightweight JavaScript Engine v0.7 (AttentionIsAllYouNeed)
+# NybleJS — Lightweight JavaScript Engine v1.0 (Biryani)
 
-A from-scratch JavaScript engine written in C++17, optimized for performance. Implements a **hybrid architecture**: a tree-walking interpreter for small scripts and a bytecode VM (stack-based) for larger scripts (threshold: 300 AST nodes). Includes a custom lexer, recursive-descent parser, bytecode compiler, two execution engines, a mark-sweep garbage collector, and a full value system with JavaScript-style type coercion.
+NybleJS is the JavaScript engine, CLI, and REPL of the [Nyble](https://github.com/Fundiman/nyble) browser project. As of v1.0 it runs on **Ant Silver** — an independent, MIT-licensed JavaScript engine written in C — instead of the original from-scratch C++ interpreter/VM.
 
-## Features Implemented
+The NybleJS front end is intentionally unchanged: same `njs` binary name, same Java-style flags (`-Xmx`, `-engine`, `-D`), same `--meow` cat, same colored REPL and keybindings, same "keep going after an eval blows up" behavior. Only the engine underneath was swapped.
 
-### Lexer
-- Full tokenizer: identifiers, numbers (int, float, scientific), strings (single/double quotes)
-- Escape sequences in strings: `\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\'`
-- Line/column tracking for error reporting
-- Single-line (`//`) and multi-line (`/* */`) comments
+> **v1.0 "Biryani"** — engine migration release. The v0.x engine was retired non-destructively at tag `nyblejs-v0.7-final` (commit `339bfbe`), so nothing was deleted from history.
+>
+> **Web-first:** Ant's browser/WinterTC APIs are always available. Node.js compatibility is opt-out at the CLI (`--no-node-compat`) and **off by default for embedders**; see [Node.js compatibility](#nodejs-compatibility).
 
-### Parser
-- Recursive-descent parser with full operator precedence (14 levels)
-- Variable declarations: `let`, `const`, `var`
-- Functions: declarations, anonymous functions, arrow functions (`() => {}`, `param => expr`, `(params) => expr`)
-- Control flow: `if/else`, `while`, `do-while`, `for`, `for...in`, `for...of`, `switch/case/default`
-- `return`, `break`, `continue`
-- Expressions: binary arithmetic, comparison, strict/loose equality, logical (`&&`, `||`), bitwise (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`), unary (`!`, `-`, `+`, `typeof`, `++`, `--`), ternary (`? :`), assignment with compound ops (`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`)
-- Member access: `obj.prop` and `obj[expr]`
-- Call expressions
-- Array literals with hole support
-- Object literals
-- Postfix `++`/`--`
-- `throw`, `try/catch/finally`
+## Table of contents
 
-### Prototype Chain & Class Inheritance
-- Prototype-based inheritance with `__proto__` chain walking for property lookup
-- Function prototype setup: each function gets a `.prototype` property with `.constructor`
-- `new` operator: constructor calls with prototype linking
-- `this` binding: auto-bound for regular function calls and method calls
-- Arrow functions: inherit `this` from enclosing scope (no own `this` binding)
-- `Function.prototype.call`, `apply`, `bind` for explicit `this` control
-- Inheritance via prototype reassignment (`Dog.prototype = new Animal()`)
-- Constructor return value handling (object return overrides instance)
+- [What NybleJS is today](#what-nyblejs-is-today)
+- [v1.0 at a glance](#v10-at-a-glance)
+- [Architecture](#architecture)
+- [Where the old engine went](#where-the-old-engine-went)
+- [Repository layout and the Ant submodule](#repository-layout-and-the-ant-submodule)
+- [Features](#features)
+  - [Language and runtime (Ant Silver)](#language-and-runtime-ant-silver)
+  - [Web / WinterTC built-ins](#web--wintertc-built-ins)
+  - [Node.js compatibility](#nodejs-compatibility)
+  - [TLS, crypto, and WebSockets](#tls-crypto-and-websockets)
+  - [Memory and garbage collection](#memory-and-garbage-collection)
+  - [Console, errors, and completion values](#console-errors-and-completion-values)
+- [Building](#building)
+  - [Prerequisites](#prerequisites)
+  - [Get the Ant submodule](#get-the-ant-submodule)
+  - [Build the Ant embed dist locally (Meson + Zig)](#build-the-ant-embed-dist-locally-meson--zig)
+  - [Build njs.exe](#build-njsexe)
+  - [Windows shims](#windows-shims)
+  - [Cache and temp locations](#cache-and-temp-locations)
+  - [Verify the build](#verify-the-build)
+  - [CI scope](#ci-scope)
+- [Usage](#usage)
+  - [REPL](#repl)
+  - [Run a file](#run-a-file)
+  - [Run inline code](#run-inline-code)
+  - [Command-line options](#command-line-options)
+  - [`-engine` semantics](#-engine-semantics)
+  - [`-Xmx` memory budget](#-xmx-memory-budget)
+  - [`-D` properties (`Nyble.props`)](#-d-properties-nybleprops)
+  - [Node compat flags](#node-compat-flags)
+  - [`--meow`](#--meow)
+  - [REPL keybindings](#repl-keybindings)
+  - [Piped / non-interactive REPL](#piped--non-interactive-repl)
+  - [Errors do not kill the REPL](#errors-do-not-kill-the-repl)
+- [Embedding NybleJS](#embedding-nyblejs)
+  - [Header layering](#header-layering)
+  - [Quick start (C++)](#quick-start-c)
+  - [`nyble::Engine` API reference](#nybleengine-api-reference)
+  - [C ABI reference](#c-abi-reference)
+  - [Isolate model and lifetime rules](#isolate-model-and-lifetime-rules)
+  - [Host bindings and `rawIsolate()`](#host-bindings-and-rawisolate)
+  - [Node compat from a host](#node-compat-from-a-host)
+  - [API direction: SpiderMonkey, not V8](#api-direction-spidermonkey-not-v8)
+  - [Migrating from the v0.x `Context` API](#migrating-from-the-v0x-context-api)
+  - [Host link checklist](#host-link-checklist)
+- [Compatibility and known gaps](#compatibility-and-known-gaps)
+- [Migrating from v0.7](#migrating-from-v07)
+- [Performance notes](#performance-notes)
+- [Examples](#examples)
+- [Versioning](#versioning)
+- [Development and contributing](#development-and-contributing)
+- [FAQ](#faq)
+- [License](#license)
 
-### Hybrid Engine
+---
 
-**Tree-Walking Interpreter** (for scripts < 300 AST nodes):
-- Lexical scoping with closure support
-- JavaScript type coercion rules
-- Signal-based control flow (return, break, continue, throw)
-- `try/catch/finally` with proper rethrow and scoping
+## What NybleJS is today
 
-**Bytecode VM** (for scripts >= 300 AST nodes):
-- ~60 opcode instruction set (stack-based)
-- Bytecode compiler with jump patching for control flow
-- Scope enter/exit for block scoping
-- Exception handling with catch/finally offset patching
-- Call stack with call frames
-- Function creation with closure capture
-- Arrow function support (separate `MAKE_ARROW_FUNCTION` opcode)
-- `new` operator with prototype linking
-- Method calls via `CALL_METHOD` opcode (proper `this` binding)
+NybleJS used to be a self-contained JavaScript implementation: a lexer, recursive-descent parser, tree-walking interpreter, stack bytecode VM, mark-sweep GC, and value system, all in C++17. That engine still exists in git history but is no longer the engine behind `njs`.
 
-### Garbage Collector
-- Mark-sweep collector
-- Root tracing (environment chains, temporary roots)
-- RAII pinning for GC safety
-- Memory budget based on system RAM
+Today `njs` is a thin C++ host around **Ant Silver**:
 
-### Value System
-- Types: Null, Undefined, Boolean, Number, String, Object, Array, Function, NativeFunction
-- JavaScript-style type coercion (`toString()`, `toNumber()`)
-- Arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`)
-- Bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`)
-- Strict (`===`) and loose (`==`) equality
-- Comparison operators (`<`, `>`, `<=`, `>=`)
-- Property/index access (`getProperty`, `setProperty`, `getIndex`, `setIndex`)
-- Unary operators (`!`, `-`, `+`, `typeof`, `++`, `--`)
+- The CLI/REPL lives in `src/main.cpp`.
+- A small C++ façade, `nyble::Engine`, lives in `src/engine/ant_engine.h` / `.cpp`.
+- A one-file C bridge, `src/engine/ant_engine.c` / `ant_engine_c.h`, is the **only** place that includes Ant's C-only headers.
+- Everything else — parser, compiler, VM, JIT, GC, builtins, web APIs — comes from `libant.a`, built from the `third_party/ant` submodule.
 
-### String Methods
-`charAt`, `indexOf`, `slice`, `toUpperCase`, `toLowerCase`, `trim`, `startsWith`, `endsWith`, `includes`, `repeat`, `length`
+That split exists because Ant's headers are **C-only** (they use C constructs that do not compile as C++). Never include `ant.h` or `ant/*.h` from a `.cpp` file; go through the bridge.
 
-### Array Methods
-`push`, `pop`, `shift`, `unshift`, `indexOf`, `includes`, `join`, `slice`, `splice`, `forEach`, `map`, `filter`, `reduce`, `find`, `some`, `every`, `sort`, `reverse`, `concat`, `length`
+The browser-side goal is a small, embeddable, web-first JavaScript runtime. Node compatibility is kept for compatibility with existing scripts, but it is disabled by default in the runtime and in embedded hosts, so the web surface is the baseline.
 
-### Built-in APIs
-- **console**: `log`, `error`, `warn`, `time`, `timeEnd`, `assert`
-- **Math**: All 8 constants (PI, E, LN2, LN10, LOG2E, LOG10E, SQRT2, SQRT1_2) + 27 functions (abs, floor, ceil, round, trunc, sqrt, cbrt, pow, exp, log, log2, log10, min, max, random, sin, cos, tan, asin, acos, atan, atan2, sign, hypot, clz32, imul, fround)
-- **JSON**: `parse` (basic), `stringify` (uses `toString()`, no full serialization)
-- **Global**: `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `typeof`, `NaN`, `Infinity`, `undefined`, `globalThis`
-- **Object**: `keys`, `values`, `entries`, `assign`, `create`, `defineProperty`
-- **Function**: `prototype`, `call`, `apply`, `bind`
-- **Array**: `isArray`, `from`, `of`
-- **Number**: Constants (MAX_VALUE, MIN_VALUE, NaN, POSITIVE_INFINITY, NEGATIVE_INFINITY, MAX_SAFE_INTEGER, MIN_SAFE_INTEGER, EPSILON) + methods (`isNaN`, `isFinite`, `isInteger`, `isSafeInteger`)
-- **String**: `fromCharCode`, `fromCodePoint`
-- **Date**: `now`, `parse`, `UTC` (static) + constructor (`new Date()`, `new Date(ms)`, `new Date(str)`, `new Date(y,m,d,h,min,s,ms)`) + instance methods (`getTime`, `getFullYear`, `getMonth`, `getDate`, `getDay`, `getHours`, `getMinutes`, `getSeconds`, `getMilliseconds`, `getTimezoneOffset`, `getUTC*`, `setTime`, `setFullYear`, `setMonth`, `setDate`, `setHours`, `setMinutes`, `setSeconds`, `setMilliseconds`, `toString`, `toDateString`, `toTimeString`, `toISOString`, `toJSON`, `toUTCString`, `toLocaleString`, `toLocaleDateString`, `toLocaleTimeString`, `valueOf`)
-- **Error**: `Error` constructor
-- **Timer stubs**: `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`
-- **URI stubs**: `encodeURI`, `decodeURI`, `encodeURIComponent`, `decodeURIComponent`
-- **eval stub**: Returns string representation
+## v1.0 at a glance
 
-### Runtime
-- REPL with syntax highlighting (as-you-type via raw terminal input)
-- REPL keybindings: arrow keys, Home/End, Ctrl+A/E/U/K/W/D/C
-- Multi-line input support (auto-detects incomplete input)
-- ANSI colored output on all built-in messages (errors, help, version, REPL)
-- Java-style CLI options (`-Xmx`, `-engine`, `-c`, `-Dkey=value`)
-- `--meow` flag: ASCII cat with a random quote or cat fact
-- Single-header include (`src/nyblejs.h`) for embedding as a library
-- `nyble::Context`: V8-like embedding API — auto-selects tree/VM per script, roots the GC, keeps code alive across scripts, unifies JS exceptions (`src/context.h`)
-- File execution: `njs script.js`
-- Makefile build system (multi-file compilation)
+| Area | v0.7 (retired) | v1.0 "Biryani" |
+|---|---|---|
+| Engine | Hybrid tree-walker + bytecode VM, C++17 | Ant Silver, C, with its own parser/compiler/VM/JIT |
+| Standard library | Hand-written builtins, partial `Date`/`JSON` | Ant's ES/Web builtins plus WinterTC APIs |
+| Modules | `import`/`export` not implemented | ESM loader, `node:`/bare builtin resolution gated by node compat |
+| Async | Timer stubs only | Event loop, microtasks, promises, timers, streams, fetch/WebSocket |
+| TLS | None | mbedTLS/tlsuv backend, verification fail-closed; no BoringSSL |
+| GC | Process-wide mark-sweep heap, one context per process | Per-isolate Ant GC via `Ant_Create()` |
+| Embedding API | V8-flavored `nyble::Context`, `Value`, `gHeap.rootTracer` | `nyble::Engine` façade; string-in/string-out `eval()` + `rawIsolate()` |
+| Build | `g++ -std=c++17 src/*.cpp`, MSYS2/WSL | clang/Zig targeting mingw-w64, Meson/Ninja for Ant, no MSYS2 dependency |
+| Node compat | Not applicable | Off by default in runtime/embed; on by default in the CLI |
+| Version | v0.7 (AttentionIsAllYouNeed) | v1.0 (Biryani) |
 
-## Not Yet Implemented
-- `class` declarations (the keyword is lexed, but there is no parser/engine support — use prototype-based inheritance instead)
-- Generators / async / await
-- `Proxy`, `Reflect`, `Symbol`
-- `Map`, `Set`, `WeakMap`, `WeakSet`
-- `TypedArray`, `DataView`
-- `Promise`
-- `import`/`export` modules
-- JIT compilation
-- `arguments` object
-- Destructuring, spread/rest operators
-- Default parameters (`function f(x = 1)`)
-- Object property shorthand (`{x, y}`)
-- Template literals with expressions
-- `String.prototype.split`
-- Regular expressions
-- `Intl` APIs
-- `void`, `delete`, `instanceof` operators
-- Comma operator
-- Label statements
-- `debugger`, `with` statements
+## Architecture
+
+```
+NybleJS/
+├── src/
+│   ├── main.cpp                  CLI, REPL, syntax highlighting, flags
+│   ├── cats.h                    --meow wisdom/cat-fact database
+│   ├── nyblejs.h                 public embedding header
+│   └── engine/
+│       ├── ant_engine.h/.cpp     C++ façade: nyble::Engine
+│       ├── ant_engine_c.h        C-ABI declarations (safe from C++)
+│       └── ant_engine.c          ONLY file that sees Ant's C headers
+├── build/
+│   ├── pathcch_shim.c            mingw-w64 shim for PathCchCombine
+│   └── sync_shim.c               mingw-w64 shim for WaitOnAddress/WakeByAddressSingle
+├── Makefile                      links njs against a prebuilt libant dist
+└── README.md                     this file
+
+third_party/ant/                  submodule (Ant Silver, MIT, C)
+├── include/                      C headers
+├── src/                          engine, modules, runtime, CLI
+├── vendor/                       vendored dependencies (mbedTLS, tlsuv, libuv, ...)
+└── build-embed-zig/libant/        locally built embed dist (gitignored)
+```
+
+Data flow for one line of script:
+
+```
+njs CLI / host
+  → nyble::Engine::eval(source, out)
+    → nyble_engine_eval(...)          [C ABI]
+      → js_eval_bytecode_eval(js, ...) [Ant]
+        → completion value → Ant_Value_Describe() → display string
+  → Engine::drainEventLoop() → js_run_event_loop(js)
+```
+
+Errors take the same path in reverse: an Ant type error becomes a malloc'd string, `Engine::eval()` returns `false`, and `Engine::errors()` holds the text. The CLI prints it with an `Uncaught` prefix and carries on.
+
+## Where the old engine went
+
+Nothing was destroyed:
+
+- The final v0 engine is tagged **`nyblejs-v0.7-final`** at commit **`339bfbe`**.
+- The source files (`src/lexer.*`, `parser.*`, `compiler.*`, `vm.*`, `interp.*`, `gc.*`, `context.*`, etc.) remain in the tree as legacy material; they are **not** compiled into v1's `njs`.
+- Do not use those files for new work. They describe the tree/VM architecture that v1 no longer uses, and they are the source of most stale claims in old docs.
+- `nyblejs.h` now points only at the Ant façade; the old `nyble::Context` / `nyble::VM` / `nyble::Value` API is not part of v1.
+
+## Repository layout and the Ant submodule
+
+Ant is a **git submodule**, not a downloaded release and not a vendored copy of source code pasted into the repo:
+
+```ini
+# .gitmodules
+[submodule "third_party/ant"]
+    path = third_party/ant
+    url = https://github.com/Fundiman/nyble.git
+    branch = ant
+```
+
+- The submodule tracks the **`ant` branch** of the same GitHub repository, which mirrors Ant Silver's **`master`** branch (not a "latest stable" tag) plus Nyble-specific patches.
+- The checked-out commit at the time of writing is `a63e19ff` — `nyble: mbedtls tls/crypto/ws unstubs, node-compat runtime gate`.
+- Nyble-specific Ant changes are committed inside the submodule, then the superproject records the new submodule pointer. The Windows CA-store fix for tlsuv is also preserved as `patches/tlsuv-win-ca-stores.patch` at the superproject root.
+- Never fetch engine sources from a release/archive URL. `git submodule update` is the supported path.
+
+## Features
+
+### Language and runtime (Ant Silver)
+
+Ant Silver is a full ES engine, not a toy interpreter. Highlights relevant to NybleJS:
+
+- Modern syntax: `let`/`const`, closures, arrow functions, classes, `for...of`, `for...in`, destructuring, spread/rest, template literals, optional chaining, `async`/`await`, generators, `Proxy`/`Reflect`, `Symbol`, `Map`/`Set`/`WeakMap`/`WeakSet`, typed arrays and `DataView`.
+- `try`/`catch`/`finally`, `throw`, proper error objects and stacks.
+- Promise jobs and an event loop driven by `js_run_event_loop()`; `Engine::drainEventLoop()` is called by the CLI after every script so pending work runs before exit.
+- ES modules via Ant's loader. `node:` specifiers and bare builtin names are resolved only when node compat is enabled; with node compat off, browser-style specifiers remain available and Node builtins are blocked.
+- Temporal/BigInt/Intl/RegExp/WASM support in upstream Ant. **Note:** the local Zig embed build disables `temporal` and `encoding_rs`, so those are not part of the locally linked `njs.exe` yet.
+- Upstream Ant reports 100% on compat-table and high test262 coverage; see `third_party/ant/README.md` for the upstream numbers. Those figures describe Ant itself, not necessarily the locally configured NybleJS embed.
+
+### Web / WinterTC built-ins
+
+Bootstrapped by `ant_bootstrap_modules()` (`third_party/ant/src/bootstrap.c`) and available regardless of node compat:
+
+- Globals/internals: `Symbol`, iterator/generator helpers, `Reflect`, `Proxy`, `Math`, `BigInt`, `Date`, `Intl`, `JSON`, `console`, `structuredClone`, `AbortController`, `DOMException`.
+- Web platform: `fetch`, `Request`, `Response`, `Headers`, `Blob`, `FormData`, `URL`, `URLSearchParams`, `TextEncoder`/`TextDecoder`, `EventSource`, `WebSocket`, `MessagePort`, `Web Worker`, `Navigator`, `localStorage`, `sessionStorage`, `performance`, `Observable`, timers (`setTimeout`, `setInterval`, ...), streams (readable/writable/transform/codec/compression), cron, WASM, and SQLite/host modules where enabled.
+- Collections: `Map`, `Set`, `WeakMap`, `WeakSet`, queuing strategies.
+- Local embed caveat: `temporal` and `encoding_rs` are disabled in the local build; `crypto.subtle` support is partial (see below).
+
+### Node.js compatibility
+
+Ant has a runtime flag, `ANT_RUNTIME_NODE_COMPAT`, backed by `ant_isolate_options_t.node_compat`. When set, bootstrap installs:
+
+- `Buffer`
+- `fs`
+- `process`
+- `tty`
+- `events`
+- Node-style `node:` / bare builtin module resolution in the ESM loader
+- CJS globals and entry/repl/runtime hooks in the Ant CLI layer
+
+Default policy:
+
+| Entry point | Default | How to change |
+|---|---|---|
+| `nyble::Engine` (embedding) | **off** | Pass `nodeCompat = true` to the constructor |
+| Ant runtime / `Ant_Create()` | **off** | Set `ant_isolate_options_t.node_compat = true` |
+| NybleJS `njs` CLI | **on** (legacy compat) | `--no-node-compat` to disable, `--node-compat` to re-enable |
+| Upstream `ant` CLI | **on** | `--web-compat` to disable |
+
+With node compat off, browser APIs are unchanged; only the Node-flavored globals and module resolution are gated out. See [Node compat flags](#node-compat-flags).
+
+### TLS, crypto, and WebSockets
+
+- **No BoringSSL.** The embed is configured with `-Dtls_backend=mbedtls`, using tlsuv's mbedTLS engine.
+- TLS verification **fails closed**: a self-signed host (`self-signed.badssl.com`) is rejected. Valid certificates work (`example.com:443` connects).
+- Windows certificate loading patches tlsuv to include the `ROOT`, `CA`, and `AuthRoot` system stores; the patch lives in `patches/tlsuv-win-ca-stores.patch`.
+- `rejectUnauthorized: false` is wired through tlsuv's cert-verify accept callback as a debug/compat escape hatch. Default verification remains on, and the per-connection/per-context semantics are still being audited.
+- `src/modules/crypto.c` provides partial mbedTLS-backed Node/WebCrypto basics: `randomUUID`, `crypto.getRandomValues`, `randomBytes`, and `subtle.digest` for SHA-1/256/384/512. Full `subtle` parity is future work.
+- `src/http/websocket.c` has its SHA1 accept-key and frame logic unstubbed for `ANT_MBEDTLS_TLS_BACKEND`.
+- `src/cli/registry.c` is **intentionally still a stub**; registry parity is not claimed.
+
+### Memory and garbage collection
+
+- `nyble::Engine`'s constructor takes `heapBytes`; this is forwarded to `ant_isolate_options_t.object_arena_bytes`.
+- `0` (the default, including when `-Xmx` is not passed) lets Ant pick its own arena size.
+- `-Xmx<size>` accepts `k`, `m`, and `g` suffixes (case-insensitive) and is forwarded to the isolate. It is a sizing hint for the object arena, not a hard process limit.
+- Each `Engine` owns one Ant isolate created with `Ant_Create()` and torn down with `Ant_Destroy()`; the GC is per-isolate, not a single process-wide heap as in v0.x.
+- `js_setstackbase()` is called from the C bridge so Ant can scan the host stack from the right address; hosts that create their own isolates via `rawIsolate()` should preserve that pattern.
+
+### Console, errors, and completion values
+
+- `console.log` and friends write through Ant's console module.
+- `Engine::eval()` renders the completion value with `Ant_Value_Describe()` so REPL echo stays useful for objects/arrays. `undefined` and `null` render as an empty string and produce no echo line — the same behavior as the v0.x REPL.
+- A JavaScript exception makes `eval()` return `false`; the exception text is stored in `Engine::errors()` and cleared at the start of the next eval.
+- Native/host errors are surfaced as C++ `std::exception` from the façade and are caught by the CLI's REPL loop.
+
+---
 
 ## Building
 
-Requirements: g++ with C++17 support (MinGW, MSYS2, or WSL)
+### Prerequisites
+
+- **clang** (`clang`/`clang++`) or **Zig 0.16.0** providing `zig cc` / `zig c++` with the `x86_64-windows-gnu` target.
+- **Meson + Ninja** for configuring and building the Ant embed.
+- `git` with submodule support.
+- **No MSYS2 installation required.** Ant upstream documents an MSYS2/MINGW64 path; NybleJS does not use it. We also do not use MSVC — "we CANNOT STAND MSVC!!" — everything targets mingw-w64.
+- **No Rust porting.** The embed archive already contains what Ant needs; do not translate anything to Rust.
+- **No BoringSSL.** Use the mbedTLS TLS backend.
+
+Current supported local target: **Windows x86_64, mingw-w64 ABI**. The POSIX path needs a `stdinIsTTY()` shim in `src/main.cpp` (see [Compatibility and known gaps](#compatibility-and-known-gaps)).
+
+### Get the Ant submodule
 
 ```bash
-make
+git submodule update --init --recursive
+git -C third_party/ant checkout ant    # submodule tracks the `ant` branch = Ant master + local patches
+git submodule status
 ```
 
-Or manually:
-```bash
-g++ -std=c++17 -O3 -flto src/*.cpp -o njs
+Do not download release artifacts. If the submodule is empty, the first command is the fix.
+
+### Build the Ant embed dist locally (Meson + Zig)
+
+Use a separate build tree with LTO off so the archive contains native objects instead of LLVM bitcode. The exact options used locally are below; they are also recorded in `third_party/ant/build-embed-zig/meson-info/`.
+
+```powershell
+$env:CC  = "zig cc -target x86_64-windows-gnu"
+$env:CXX = "zig c++ -target x86_64-windows-gnu"
+
+meson setup third_party/ant/build-embed-zig third_party/ant `
+  -Db_lto=false `
+  -Dc_std=gnu2x `
+  -Dtls_backend=mbedtls `
+  -Dtemporal=disabled `
+  -Dencoding_rs=disabled
+
+meson compile -C third_party/ant/build-embed-zig embed
 ```
+
+Result:
+
+```
+third_party/ant/build-embed-zig/libant/
+├── include/ant.h              umbrella C header
+├── include/ant/...            namespaced headers
+└── lib/libant.a               engine + vendored deps in one static archive
+```
+
+The `embed` target also produces a `lib/pkgconfig/libant.pc` describing include paths, defines, and system libraries; `PKG_CONFIG_PATH` can point at `build-embed-zig/libant/lib/pkgconfig`.
+
+Why these options:
+
+| Option | Reason |
+|---|---|
+| `-Db_lto=false` | `libant.a` must hold native objects for the NybleJS link |
+| `-Dc_std=gnu2x` | Ant's C sources need GNU C extensions |
+| `-Dtls_backend=mbedtls` | No BoringSSL in this build |
+| `-Dtemporal=disabled` | Avoids the Temporal Rust dependency for now |
+| `-Dencoding_rs=disabled` | Avoids the encoding_rs Rust dependency for now |
+
+### Build njs.exe
+
+The Makefile expects an embed dist at `ANT_DIR` (default `../tools/ant`) containing `lib/libant.a` and `include/`. Point it at the tree you just built:
+
+```powershell
+cd NybleJS
+make ANT_DIR=../third_party/ant/build-embed-zig/libant
+```
+
+Equivalent when using Zig as the driver directly (paths adjusted for your checkout):
+
+```powershell
+zig c++ -target x86_64-windows-gnu -std=c++17 -O2 -Isrc `
+  -I../third_party/ant/build-embed-zig/libant/include `
+  -c src/main.cpp -o build/main.o
+zig c++ -target x86_64-windows-gnu -std=c++17 -O2 -Isrc `
+  -I../third_party/ant/build-embed-zig/libant/include `
+  -c src/engine/ant_engine.cpp -o build/engine/ant_engine.o
+zig cc  -target x86_64-windows-gnu -std=gnu2x -O2 -Isrc `
+  -I../third_party/ant/build-embed-zig/libant/include `
+  -c src/engine/ant_engine.c -o build/engine/ant_engine.c.o
+zig cc  -target x86_64-windows-gnu -O2 -c build/pathcch_shim.c -o build/pathcch_shim.o
+zig cc  -target x86_64-windows-gnu -O2 -c build/sync_shim.c   -o build/sync_shim.o
+
+zig c++ -target x86_64-windows-gnu -o njs.exe `
+  build/main.o build/engine/ant_engine.o build/engine/ant_engine.c.o `
+  build/pathcch_shim.o build/sync_shim.o `
+  ../third_party/ant/build-embed-zig/libant/lib/libant.a `
+  -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp `
+  -lole32 -loleaut32 -luuid -ltaskschd -lshell32 -ladvapi32 -lbcrypt `
+  -lwinmm -lpathcch -lnormaliz -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+```
+
+The system-library list mirrors `NybleJS/Makefile` (`ANT_SYS_LIBS`) and is what static `libant.a` needs on Windows (Ant + tlsuv + mbedTLS). The output is `NybleJS/njs.exe`.
+
+### Windows shims
+
+Two small C files in `NybleJS/build/` patch gaps in the mingw-w64/Zig sysroot:
+
+- `pathcch_shim.c` — implements `PathCchCombine` with a bounded wide-string join and returns `STRSAFE_E_INSUFFICIENT_BUFFER` when the output does not fit. Ant uses it for path handling.
+- `sync_shim.c` — implements `WaitOnAddress` / `WakeByAddressSingle` by resolving the real kernel32 functions at runtime and falling back to `Sleep`/no-op when unavailable (older Windows).
+
+Keep these in host builds; they are not part of Ant and are not in `libant.a`.
+
+### Cache and temp locations
+
+On this machine the Zig caches and temp dirs are deliberately pinned (they are large and slow on the default drives):
+
+```powershell
+$env:ZIG_GLOBAL_CACHE_DIR = "E:\.zig-global-cache"
+$env:ZIG_LOCAL_CACHE_DIR  = "E:\.zig-local-cache"
+$env:TMP = "M:\tmp"
+$env:TEMP = "M:\tmp"
+```
+
+Use the same values when rebuilding Ant or `njs.exe`, or builds will recompile everything into a new cache.
+
+### Verify the build
+
+```powershell
+.\njs.exe --version        # NybleJS v1.0 (Biryani)
+.\njs.exe -c "1 + 1"       # 2
+echo 1+1 | .\njs.exe       # 2  (piped REPL)
+.\njs.exe --meow           # ASCII cat + wisdom/cat fact
+.\njs.exe -engine tree -c "console.log(42)"   # 42 (compat alias)
+.\njs.exe -Xmx64m -c "Nyble.props"            # object with CLI props
+.\njs.exe --no-node-compat -c "typeof process" # undefined
+```
+
+TLS smoke checks (network required):
+
+```powershell
+.\njs.exe --no-node-compat -c "fetch('https://example.com').then(r => console.log(r.status))"
+# self-signed hosts must fail verification, not silently connect
+```
+
+### CI scope
+
+CI is used to build/verify **Ant only**. There is no full NybleJS smoke in CI yet; link-and-run verification is local for now. Do not add a full `njs` smoke job without discussing it first.
+
+---
 
 ## Usage
 
-REPL mode (with syntax highlighting):
-```bash
-./njs
+### REPL
+
+```powershell
+.\njs.exe
 ```
 
-Run a file:
-```bash
-./njs script.js
+You get a colored banner, `> ` prompt, and as-you-type syntax highlighting:
+
+- strings — green
+- numbers — cyan
+- keywords (`let`, `function`, `if`, ...) — magenta
+- literals (`true`, `false`, `null`, `undefined`) — bold yellow
+- operators — red
+- punctuation — gray
+- identifiers — white
+
+Incomplete input is detected heuristically (unbalanced `{`, `(`, `[`, or a trailing `+ - * / , .`), and the prompt switches to `... ` until the construct closes. Type `exit` on an empty line to quit, or press Ctrl+D.
+
+### Run a file
+
+```powershell
+.\njs.exe script.js
 ```
 
-### Command-Line Options
+The file is read as UTF-8 text and evaluated in one isolate. After eval finishes, `drainEventLoop()` runs pending promise jobs/timers before the process exits.
+
+### Run inline code
+
+```powershell
+.\njs.exe -c "console.log(42)"
+```
+
+`-c` and a filename can be combined; `-c` wins and the filename is ignored for source selection.
+
+### Command-line options
 
 | Option | Description |
 |---|---|
-| `-help`, `--help` | Show help message and exit |
-| `-version`, `--version` | Show version info and exit |
-| `-Xmx<size>` | Set GC max memory budget (e.g. `256m`, `1g`) |
-| `-engine <type>`, `--engine <type>` | Force execution engine: `tree`, `vm`, or `jit` |
-| `-c <code>` | Execute inline JavaScript code |
-| `--meow` | Display an ASCII cat with a random quote or cat fact |
-| `-D<key>=<value>` | Set a custom property |
+| `-help`, `--help` | Show the colored help message and exit |
+| `-version`, `--version` | Show `NybleJS v1.0 (Biryani)` and exit |
+| `-c <code>` | Execute inline JavaScript code instead of a file |
+| `-Xmx<size>` | Ant object-arena sizing hint; suffixes `k`, `m`, `g` (e.g. `256m`, `1g`) |
+| `-engine <type>`, `--engine <type>` | Engine selector: `ant` (default), `tree`, `vm`, `jit` (compat aliases; see below) |
+| `-D<key>=<value>` | Set `Nyble.props.<key>` to `<value>` (strings); repeatable |
+| `--node-compat` | Force Node.js compatibility on (CLI default) |
+| `--no-node-compat` | Disable Node.js compatibility; browser-like globals/modules only |
+| `-meow`, `--meow` | Print an ASCII cat with a random encouraging quote or cat fact |
+| `<file>` | Script to run (last non-option argument) |
 
-Engine types:
-- `tree` — Tree-walking interpreter only (fast startup, good for small scripts)
-- `vm` — Bytecode VM only (better for large/complex scripts)
-- `jit` — JIT compiler (not yet implemented, errors out)
+Unknown options are an error: the CLI prints `Unknown option '<arg>'. Use -help for usage.` and exits with status 1. Options needing a value (`-engine`, `-c`) report a specific error if missing.
 
-Examples:
-```bash
-./njs -engine tree script.js
-./njs -Xmx512m script.js
-./njs --engine vm -Xmx1g script.js
-./njs -Dname=myapp -Ddebug=true script.js
-./njs -c "console.log(42)"
-./njs --meow
+### `-engine` semantics
+
+`-engine`/`--engine` exists for CLI compatibility with v0.x scripts:
+
+| Value | Behavior in v1 |
+|---|---|
+| `ant` | Explicit Ant Silver (same as the default) |
+| `tree` | Accepted as a compat alias; runs the Ant engine |
+| `vm` | Accepted as a compat alias; runs the Ant engine |
+| `jit` | Accepted by the parser but **errors out** (`JIT compiler is not yet implemented.`) — retained as a historical stub |
+
+There is no longer a per-script tree/VM threshold and no `jit` engine in the CLI.
+
+### `-Xmx` memory budget
+
+```powershell
+.\njs.exe -Xmx512m script.js
+.\njs.exe -Xmx1g -engine ant script.js
+.\njs.exe -Xmx64m --no-node-compat script.js
 ```
 
-### REPL Keybindings
+Parsing accepts a bare number (bytes) or a `k`/`m`/`g` suffix, case-insensitive. The value becomes `object_arena_bytes` for the Ant isolate. It is a tuning hint, not an OS memory cap.
+
+### `-D` properties (`Nyble.props`)
+
+```powershell
+.\njs.exe -Dname=myapp -Ddebug=true -Dregion=eu script.js
+```
+
+```javascript
+console.log(Nyble.props.name);   // "myapp"
+console.log(Nyble.props.debug);  // "true"  (string, not boolean)
+console.log(Nyble.props.region); // "eu"
+```
+
+`nyble_engine_set_prop()` quotes keys and values safely and assigns them as strings on `globalThis.Nyble.props`. All props survive across evals in the same engine.
+
+### Node compat flags
+
+```powershell
+# CLI: Node compat on by default, so this is a no-op in practice
+.\njs.exe --node-compat -c "console.log(typeof Buffer)"
+
+# Browser-like mode: no Buffer/fs/process/tty/events, no node: builtins
+.\njs.exe --no-node-compat -c "console.log(typeof Buffer, typeof process)"
+# undefined undefined
+```
+
+From embedded code, pass `false` (the default) or `true` as the fourth constructor argument. See [Node compat from a host](#node-compat-from-a-host).
+
+### `--meow`
+
+```powershell
+.\njs.exe --meow
+```
+
+Always lands: an ASCII cat plus a randomly picked entry from `src/cats.h` — an encouraging quote, a whimsical line, a playful joke, or a cat fact. It is the official test that the binary is awake.
+
+### REPL keybindings
 
 | Key | Action |
 |---|---|
-| Left / Right | Move cursor |
+| Left / Right | Move cursor within the current line |
 | Home / End | Jump to start / end of line |
 | Ctrl+A | Start of line |
 | Ctrl+E | End of line |
 | Ctrl+W | Delete word backward |
-| Ctrl+U | Delete from cursor to start |
-| Ctrl+K | Delete from cursor to end |
-| Ctrl+C | Cancel current line |
-| Ctrl+D | Exit REPL |
+| Ctrl+U | Delete from cursor to start of line |
+| Ctrl+K | Delete from cursor to end of line |
+| Ctrl+C | Cancel/clear the current line (does not exit) |
+| Ctrl+D | Exit the REPL |
+| Backspace | Delete character before cursor |
+| Delete | Delete character at cursor |
+| Enter / Return | Submit the current input |
+| Up / Down | Recognized but not yet wired to a history buffer |
 
-The REPL also works in **piped / non-interactive mode** (`echo "1 + 1" | njs` or `njs < script.js`): it reads lines from stdin, evaluates each, and prints results — no banner or prompts. Bare expressions echo their value (`69 > 67` → `true`), with an optional trailing semicolon; declarations (`let`, `function`) do not echo. Multi-line constructs (unbalanced `{`/`(`/`[`) continue reading until they close. Ctrl+D (EOF) ends a piped session.
+The Windows implementation uses `ReadConsoleInput` with `ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT` turned off while the prompt is active, then restores the original console mode on exit.
 
-### Embedding in Your Own App
+### Piped / non-interactive REPL
 
-NybleJS is embeddable as a library — your app is the host, NybleJS is the JS engine (like V8 in Chrome). Include the single header, then compile the engine sources (everything in `src/` except `main.cpp`, which defines the CLI/REPL) alongside your project, or link against the compiled object files:
-
-```cpp
-#include "src/nyblejs.h"
+```powershell
+echo 1 + 1 | .\njs.exe
+Get-Content script.js | .\njs.exe
 ```
 
-#### Recommended: `nyble::Context`
+When stdin is not a TTY:
 
-`Context` is the V8-style entry point: one call runs a script, it **auto-selects** between the tree-walking interpreter and the bytecode VM per script, roots the garbage collector for you, keeps code alive so functions persist across scripts, and unifies JS exceptions into `NybleRuntimeError`:
+- no banner, no prompts, no highlighting pass;
+- one line is read at a time;
+- bare expressions echo their value (with or without a trailing `;`);
+- declarations (`let`, `function`) do not echo;
+- unbalanced blocks/trailing operators keep reading until closed;
+- `exit` ends the session;
+- EOF (Ctrl+D equivalent) ends the session.
+
+### Errors do not kill the REPL
+
+This is deliberate v0.x behavior and is preserved:
+
+```text
+> throw new Error("boom")
+Uncaught Error: boom
+> 1 + 1
+2
+```
+
+`eval()` exceptions, `std::exception`s, and even unknown C++ exceptions are caught in the REPL loop. The partial input buffer is cleared and the next prompt appears. `engine.drainEventLoop()` is called after successful evals (and inside the protected region) so async work still runs. The process exits only via `exit`, Ctrl+D, EOF, or a CLI-level error before the REPL starts.
+
+---
+
+## Embedding NybleJS
+
+### Header layering
+
+```cpp
+#include "src/nyblejs.h"        // public header; forwards to engine/ant_engine.h
+```
+
+`nyblejs.h` is intentionally tiny: it includes `engine/ant_engine.h`, which declares `nyble::Engine` using only standard C++ types (`std::string`, `std::vector`, `void*`). Ant's C headers are hidden behind `engine/ant_engine.c`.
+
+### Quick start (C++)
 
 ```cpp
 #include <iostream>
 #include "src/nyblejs.h"
 
 int main() {
-    // 1. One context = one shared global scope (like a V8 context/global object)
-    nyble::Context ctx;
+    // One Engine == one Ant isolate == one JS global scope.
+    // argc/argv are forwarded to Ant's runtime init; 0/nullptr is fine.
+    // heapBytes = 0 lets Ant choose its arena.
+    // Final arg = node compat; false/off is the embed default.
+    nyble::Engine engine(0, nullptr, 0, /*nodeCompat=*/false);
 
-    // 2. Register a native C++ function — callable from JS immediately
-    //    NativeFn = Value(const std::vector<Value>& args, const Value& thisVal)
-    ctx.define("addCpp", [](const std::vector<nyble::Value>& a, const nyble::Value&) -> nyble::Value {
-        return nyble::Value::makeNum(a[0].toNumber() + a[1].toNumber());
-    });
+    // Same mechanism as CLI -Dkey=value.
+    engine.setProp("app", "embed-demo");
 
-    // 3. Run a script — engine picked automatically (tree < 300 AST nodes, VM otherwise)
-    nyble::Value result;
-    if (!ctx.evaluate("let x = addCpp(2, 3);", result)) {
-        for (auto& err : ctx.parseErrors()) std::cerr << err << "\n";  // parse error
+    std::string out;
+    if (!engine.eval("console.log('hello from Ant'); 1 + 1", out)) {
+        for (const auto& err : engine.errors())
+            std::cerr << "Uncaught " << err << '\n';
         return 1;
     }
-    std::cout << result.toNumber() << "\n";  // 5
 
-    // 4. State persists across scripts; JS errors come back as C++ exceptions
-    ctx.evaluate("function double(n) { return n * 2; }", result);
-    try {
-        std::cout << ctx.call(ctx.get("double"), {nyble::Value::makeNum(21)}).toNumber() << "\n";  // 42
-    } catch (const nyble::NybleRuntimeError& e) {
-        std::cerr << "Uncaught: " << e.error.toString() << "\n";
-    }
+    std::cout << out << '\n';       // 2
+    engine.drainEventLoop();        // let pending jobs/timers run
     return 0;
 }
 ```
 
-`Context` API: `evaluate(source, result)` (returns `false` on parse errors, throws `NybleRuntimeError` on uncaught JS errors), `define(name, value-or-native)`, `get(name)`, `call(fn, args, thisArg)`, `parseErrors()`, `setEngine(Context::Engine::Auto|Tree|VM)`, `setVmThreshold(n)`, `lastEngine()`, `globalEnv()`. `VM` and `Interpreter` are unchanged and still usable directly.
+A buildable version of this example lives in `examples/embed_engine.cpp`. Compile `src/main.cpp` **not at all** for a host build. Compile `src/engine/ant_engine.cpp` (C++) and `src/engine/ant_engine.c` (C), then link `libant.a` and the Windows system libraries listed in the Makefile. See [Host link checklist](#host-link-checklist).
 
-#### Manual engine control
+`test_link.cpp` and `test_context.cpp` at the NybleJS root are legacy v0.x tests against the retired `nyble::VM`/`nyble::Context` API. They are kept for reference but do not build in v1.
 
-If you want explicit control (or to embed both engines side by side), use `VM` or `Interpreter` directly:
+### `nyble::Engine` API reference
+
+Declared in `src/engine/ant_engine.h`:
+
+| Member | Meaning |
+|---|---|
+| `Engine(int argc = 0, char** argv = nullptr, size_t heapBytes = 0, bool nodeCompat = false)` | Create an Ant isolate, initialize its runtime, bootstrap modules, and install `Nyble.props`. Throws `std::runtime_error` if `Ant_Create()` fails. Node compat is **off by default** for embeddings; pass `true` to opt in. |
+| `~Engine()` | Calls `Ant_Destroy()` and frees the C bridge object. |
+| `bool eval(const std::string& source, std::string& result)` | Evaluate in the isolate's global scope. On success returns `true` and writes a display-ready completion string to `result` (empty for `undefined`/`null`). On a JS error returns `false` and fills `errors()`. |
+| `void setProp(const std::string& key, const std::string& value)` | Set `Nyble.props[key] = value` as a string. |
+| `void drainEventLoop()` | Run pending promise jobs/timers via `js_run_event_loop()`. |
+| `const std::vector<std::string>& errors() const` | Last eval's error strings; cleared at the start of each eval. |
+| `void* rawIsolate() const` | Escape hatch: returns the underlying `ant_t*` for host bindings. Null if the engine is gone. |
+| Copy constructor / copy assignment | Deleted. One C++ object owns one isolate. |
+
+Defaults are consistent across the runtime and embedders: `Ant_Create()` leaves node compat off, and `nyble::Engine` defaults `nodeCompat = false`. The **CLI** deliberately defaults it on (`--no-node-compat` turns it off) for legacy script compatibility.
+
+### C ABI reference
+
+Declared in `src/engine/ant_engine_c.h`, implemented in `src/engine/ant_engine.c`:
+
+| Function | Contract |
+|---|---|
+| `nyble_engine* nyble_engine_create(int argc, char** argv, size_t heap_bytes, int node_compat)` | `Ant_Create()` + stack base + runtime init + module bootstrap + `Nyble.props` init. Returns `NULL` on allocation failure. |
+| `void nyble_engine_destroy(nyble_engine*)` | `Ant_Destroy()` + free. Safe on `NULL`. |
+| `int nyble_engine_eval(nyble_engine*, const char* src, size_t len, char** out)` | 1 on success, 0 on JS error. Always sets `*out` to a malloc'd string; caller frees. Empty string for undefined/null. |
+| `void nyble_engine_set_prop(nyble_engine*, const char* key, const char* value)` | Safely quotes and assigns `Nyble.props[key]`. |
+| `void nyble_engine_drain(nyble_engine*)` | `js_run_event_loop()`. |
+| `void* nyble_engine_isolate(nyble_engine*)` | The raw `ant_t*`. |
+
+If you write a host in plain C, use this ABI directly and never include Ant's headers from C++ translation units.
+
+### Isolate model and lifetime rules
+
+- One `nyble::Engine` is one `ant_t` isolate with its own global scope and GC arena. Unlike v0.x (`gHeap` was a process-wide singleton), multiple engines can coexist in one process.
+- Global state installed during creation (`Nyble.props`, bootstrapped modules) lives for the engine's lifetime; re-creating an engine starts fresh.
+- Scripts evaluated in the same engine share globals: define a function in one eval, call it in the next.
+- `eval()` clears `errors_` and `result` on entry; save what you need before the next call.
+- `rawIsolate()` is valid until destruction; do not use it after `~Engine()`.
+- The C bridge calls `js_setstackbase()` against a field inside its own struct. Hosts that create additional isolates should set a stack base similarly so conservative stack scanning sees host frames.
+
+### Host bindings and `rawIsolate()`
+
+`rawIsolate()` is the supported path for hosts that need real Ant values (DOM bindings, storage adapters, custom modules). Cast it back to `ant_t*` in C code, not in C++:
+
+```c
+/* host_bindings.c — plain C, allowed to include Ant headers */
+#include "engine/ant_engine_c.h"
+#include "ant.h"
+
+void register_host_binding(nyble_engine* e) {
+    ant_t* js = (ant_t*)nyble_engine_isolate(e);
+    /* install your native functions/modules on js here */
+}
+```
+
+Do not include `ant.h` from a `.cpp` file; the bridge split exists for that reason.
+
+### Node compat from a host
 
 ```cpp
-#include <iostream>
-#include "src/nyblejs.h"
-
-int main() {
-    // 1. Engine instance (constructor installs console/Math/Date/etc. on globalEnv)
-    nyble::VM vm;
-
-    // 2. Root the GC at the engine (like V8 handles) — required
-    nyble::gHeap.rootTracer = [&vm](std::vector<nyble::GCHeader*>& wl) {
-        if (vm.globalEnv) vm.globalEnv->traceGCValues(wl);
-    };
-
-    // 3. Register a native C++ function — now callable from JS
-    vm.globalEnv->define("addCpp", nyble::Value::makeNative(
-        [](const std::vector<nyble::Value>& a, const nyble::Value&) -> nyble::Value {
-            return nyble::Value::makeNum(a[0].toNumber() + a[1].toNumber());
-        }));
-
-    // 4. Parse -> compile -> run
-    std::string source = "console.log(addCpp(2, 3));";
-    nyble::Lexer lexer(source);
-    auto tokens = lexer.tokenize();
-    nyble::Parser parser(tokens);
-    auto program = parser.parse();
-    if (!parser.getErrors().empty()) { /* handle parse errors */ }
-
-    nyble::BytecodeChunk chunk;
-    nyble::Compiler comp(&chunk);
-    comp.compile(program);
-
-    try {
-        vm.run(&chunk, vm.globalEnv);
-    } catch (const nyble::VMThrow& t) {            // JS exception from the VM engine
-        std::cerr << "Uncaught: " << t.value.toString() << "\n";
-    } catch (const nyble::NybleRuntimeError& e) {  // JS exception thrown by a native
-        std::cerr << "Uncaught: " << e.error.toString() << "\n";
-    }
-    return 0;
-}
+nyble::Engine nodeish(0, nullptr, 0, /*nodeCompat=*/true);   // Buffer/fs/process/tty/events available
+nyble::Engine browser(0, nullptr, 0, /*nodeCompat=*/false);  // web APIs only (recommended)
 ```
 
-Notes for hosts:
-- **Two engines**: `nyble::Interpreter` (tree-walker, best for small scripts) and `nyble::VM` (bytecode, best for large scripts). Both install builtins on their `globalEnv`. For the interpreter, catch `Interpreter::ThrowSignal` instead of `VMThrow`. `Context` auto-selects between them per script and routes calls across engines (a tree-defined function is callable from a VM script and vice versa).
-- **Keeping code alive**: functions hold raw pointers into their parsed AST (tree engine) or bytecode chunk (VM). `Context` retains every script it runs, so cross-script functions stay valid. If you use `VM`/`Interpreter` directly, keep the `Program`/`BytecodeChunk` alive as long as any function value from it is in use.
-- **Calling JS from C++**: `vm.callValue(fn, args, thisArg)` (`src/vm.h`), or `ctx.call(fn, args, thisArg)` — grab a JS function with `globalEnv->get("name")` / `ctx.get("name")` and call it back.
-- **Throwing JS errors from natives**: `throw nyble::NybleRuntimeError(nyble::Value::makeTypeError("..."));` (also `makeReferenceError`, `makeRangeError`, `makeSyntaxError`).
-- **`this` binding**: native methods registered on an object receive the receiver as the second `NativeFn` argument, so method-style calls work.
-- **One engine per process**: `gHeap` and the global prototypes (`gObjectPrototype`, ...) are process-wide singletons (`src/value.h`, `src/gc.h`), so you cannot create multiple isolated contexts like Chrome's tabs — the main thing missing versus V8.
-- **Registering native classes/types**: not supported yet. There is no `External`-style C++ pointer binding and the GC has no finalizer hooks, so only native *functions* can be registered. You can hand-roll a wrapper `GCObject` (stash a pointer in a property) but must manage the C++ object's lifetime yourself.
+The flag is applied at isolate creation, before module bootstrap. It cannot be flipped mid-life; create a second engine if you need both shapes.
 
-## Performance
+### API direction: SpiderMonkey, not V8
 
-Built with aggressive optimization flags: `-O3 -flto -s`. Uses:
-- Variant-based values (no virtual dispatch)
-- Hybrid architecture: tree-walking for small scripts, bytecode VM for large scripts
-- Header/source split architecture for faster incremental builds
-- Mark-sweep garbage collection
-- No external dependencies (apart from C++ standard library)
+The v0 README described a V8-style `nyble::Context` with `HandleScope`-like GC rooting (`gHeap.rootTracer`) and `Persistent`-style lifetime thinking. That API is gone in v1.
 
-## Example
+The v1 direction is deliberately **SpiderMonkey-flavored** rather than V8-flavored:
+
+- one explicit isolate per engine (like `JSContext`/`JSRuntime` ownership),
+- host-held values are explicit rather than implicit handle scopes,
+- completion values are rendered with Ant's `Describe` helper instead of V8-style conversion gymnastics,
+- the public C++ surface stays small; the C ABI (`ant_engine_c.h`) is the stable boundary for hosts.
+
+Today the stable, supported surface is the string-in/string-out `nyble::Engine` façade documented above. Don't design new code against `Context`, `Value`, or `gHeap.rootTracer` from v0.x.
+
+### Migrating from the v0.x `Context` API
+
+| Old (v0.x) | New (v1) |
+|---|---|
+| `nyble::Context ctx;` | `nyble::Engine engine(0, nullptr, 0, false);` |
+| `ctx.evaluate(src, nyble::Value& out)` | `engine.eval(src, std::string& out)` |
+| `ctx.define("f", native)` | Install natives via `rawIsolate()` in C, or set `Nyble.props` for simple strings |
+| `ctx.call(ctx.get("f"), args)` | Evaluate JS that calls `f`, or use Ant's C API on `rawIsolate()` |
+| `ctx.parseErrors()` | `engine.errors()` (JS error text; parse errors are handled inside Ant) |
+| `gHeap.rootTracer = ...` | Not needed; isolate owns its GC/stack base |
+| `setEngine`/`setVmThreshold`/`lastEngine` | Removed; Ant handles execution strategy internally |
+| `nyble::VM` / `nyble::Interpreter` | Removed from the build; historical sources only |
+| `throw NybleRuntimeError(...)` from natives | Use Ant's C API to throw on the isolate; the façade reports it through `errors()` |
+
+### Host link checklist
+
+1. Compile C++: `src/main.cpp` (CLI only), `src/engine/ant_engine.cpp`. Use C++17.
+2. Compile C: `src/engine/ant_engine.c`, `build/pathcch_shim.c`, `build/sync_shim.c`. Use C (gnu2x is what Ant expects).
+3. Include dirs: `src/`, `build-embed-zig/libant/include`, `build-embed-zig/libant/include/ant`.
+4. Link `libant.a` with a C++ driver (`zig c++`/`clang++`).
+5. Add Windows system libs from `ANT_SYS_LIBS` in `NybleJS/Makefile`.
+6. Do not link the legacy `*.o` files at the NybleJS root (`compiler.o`, `vm.o`, `context.o`, ...). They belong to the retired v0 engine.
+
+---
+
+## Compatibility and known gaps
+
+**Still missing / partial in v1:**
+
+- `src/cli/registry.c` in Ant is intentionally stubbed; no registry parity.
+- TLS: `getProtocol()` currently returns `undefined` in the Node shim; `rejectUnauthorized: false` mutates context verification state and needs to be made per-connection; peer certificate/authorization semantics have not been audited. Verification is fail-closed by default.
+- Crypto: `crypto.subtle` only covers `digest` with SHA-1/256/384/512 plus the random helpers above. No full WebCrypto/Node crypto parity.
+- WebSocket/registry behavior beyond the unstubbed SHA1/frame paths is not fully verified against Node.
+- Node compatibility surface is intentionally partial: `Buffer`, `fs`, `process`, `tty`, `events`, and node/bare builtin resolution are gated; broader Node APIs are not guaranteed.
+- Local embed disables `temporal` and `encoding_rs`; those Ant features are not in the shipped `njs.exe` yet.
+- POSIX builds: `stdinIsTTY()` is currently implemented only under `_WIN32` while `main()` calls it unconditionally. A small POSIX shim is needed before claiming Linux/macOS support.
+- `-engine jit` is a stub that errors out.
+- Up/Down arrow keys are parsed in the REPL but no history buffer is attached.
+
+**No longer problems (v0.x claims that are obsolete):**
+
+- "No classes / no async / no `import` / no `Promise`" — all provided by Ant Silver.
+- "One engine per process because `gHeap` is a singleton" — isolates are per-`Engine`.
+- "MSYS2 required" — not needed with the Zig/mingw-w64 path.
+- "Tree-walker for <300 AST nodes / VM for larger" — that heuristic is gone.
+
+## Migrating from v0.7
+
+1. Rebuild `njs` with the Ant embed dist; do not reuse old object files.
+2. Keep your CLI flags: `-Xmx`, `-engine`, `-D`, `-c`, `--meow` all still parse.
+3. If you relied on Node globals, they are still on by default in the CLI; use them or switch to `--no-node-compat` and move to web APIs.
+4. If you embedded via `nyblejs.h`, replace `nyble::Context`/`nyble::VM` usage with `nyble::Engine` per the migration table above.
+5. If you relied on v0 quirks (string `eval` stub, stubbed timers/URI helpers, `JSON.stringify` using raw `toString()`), expect real Ant behavior instead; test your scripts.
+6. Old engine source and history remain available at `nyblejs-v0.7-final` / `339bfbe` for reference or rollback experiments.
+
+## Performance notes
+
+- Ant upstream quotes a ~9 MB runtime and ~4 ms cold start; those are upstream numbers for the `ant` binary, not measured `njs.exe` figures.
+- The embed is built with `-Db_lto=false` so hosts link native objects; `-O2`/`-O3` are fine, but do not rely on LTO across the archive.
+- mbedTLS replaces BoringSSL; TLS verification stays on by default and the Windows CA-store patch is required for valid cert chains on Windows.
+- `Engine::eval()` renders results through `Ant_Value_Describe()`; that is display formatting, not a serialization API. Use Ant's JSON/string conversion APIs from C for machine-readable output.
+- `drainEventLoop()` is explicit: embed hosts that forget it will leave promise jobs pending.
+
+## Examples
+
+These work in v1 (the classic NybleJS samples, now interpreted by Ant Silver):
 
 ```javascript
 // Fibonacci
@@ -315,73 +738,128 @@ function fib(n) {
 console.log(fib(10));
 
 // Array methods
-let arr = [1, 2, 3, 4, 5];
+const arr = [1, 2, 3, 4, 5];
 console.log(arr.map(x => x * 2));
 
 // Closure
 function counter() {
     let count = 0;
-    return function() {
-        count = count + 1;
-        return count;
-    };
+    return () => ++count;
 }
-let c = counter();
-console.log(c());
-console.log(c());
+const c = counter();
+console.log(c(), c());
 
-// Try/catch
+// Try/catch/finally
 try {
-    throw "error!";
+    throw new Error("error!");
 } catch (e) {
-    console.log(e);
+    console.log(e.message);
 } finally {
     console.log("done");
 }
 
 // Constructor + prototype + this binding
-function Animal(name) {
-    this.name = name;
-}
-Animal.prototype.speak = function() {
-    return this.name + " says hi";
-};
-
-let a = new Animal("Rex");
+function Animal(name) { this.name = name; }
+Animal.prototype.speak = function () { return this.name + " says hi"; };
+const a = new Animal("Rex");
 console.log(a.speak());
 
 // Inheritance
 function Dog(name, breed) {
-    this.name = name;
+    Animal.call(this, name);
     this.breed = breed;
 }
-Dog.prototype = new Animal("");
-Dog.prototype.bark = function() {
-    return this.name + " barks!";
-};
-
-let d = new Dog("Buddy", "Golden");
-console.log(d.speak());
-console.log(d.bark());
+Dog.prototype = Object.create(Animal.prototype);
+Dog.prototype.bark = function () { return this.name + " barks!"; };
+const d = new Dog("Buddy", "Golden");
+console.log(d.speak(), d.bark());
 
 // Function.prototype.call
-function greet(greeting) {
-    return greeting + ", " + this.name;
-}
-console.log(greet.call({name: "World"}, "Hello"));
+function greet(greeting) { return greeting + ", " + this.name; }
+console.log(greet.call({ name: "World" }, "Hello"));
 ```
 
-## Contributing
+Web APIs (available with node compat off):
 
-### Versioning
+```javascript
+crypto.randomUUID();                       // e.g. "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+crypto.getRandomValues(new Uint8Array(4)); // random bytes
+await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nyble"));
 
-NybleJS uses a two-level versioning system (major.minor). The version number is stored in `src/main.cpp` as `NYBLE_VERSION` and the version name as `NYBLE_VERSION_NAME`.
+fetch("https://example.com")
+    .then(r => console.log("status:", r.status));
 
-- **Major versions** (e.g. v0.4 → v1.0) are named. Names alternate between famous CS/AI research papers and foods from somewhere in the world — no sweets or desserts (to avoid sounding like an Android clone).
-  - v0: "Attention Is All You Need" (paper)
-  - v1: [food]
-  - v2: [paper]
-  - ...
-- **Minor versions** (e.g. v0.4 → v0.5) add features, significant changes, or bug fixes. Minor versions have no name.
+const ws = new WebSocket("wss://example.com/socket");
+ws.onmessage = ev => console.log(ev.data);
+```
 
-Every commit that changes engine behavior **must bump the minor version**.
+Node compat (CLI default, or `--node-compat`):
+
+```javascript
+console.log(Nyble.props.debug);   // string from -Ddebug=true
+console.log(typeof Buffer);       // "object" with node compat, "undefined" without
+console.log(require("node:events"));  // gated by the runtime flag
+```
+
+## Versioning
+
+NybleJS uses the two-level scheme established in `ac3240c`:
+
+- Versions are `major.minor`; there is **no patch tier**.
+- Major versions are named. Names alternate between famous CS/AI research papers and foods from somewhere in the world — no sweets or desserts (to avoid sounding like an Android clone).
+  - v0: **AttentionIsAllYouNeed** (paper) — retired at v0.7, tagged `nyblejs-v0.7-final`.
+  - v1: **Biryani** (food) — Ant Silver migration.
+  - v2: [paper] — next planned tier.
+  - v3: [food] — and so on.
+- Minor versions add features, significant changes, or bug fixes and have no name.
+- Every commit that changes engine behavior must bump the minor version.
+- The constants live in `src/main.cpp` as `NYBLE_VERSION` and `NYBLE_VERSION_NAME`; update both together with this README's title and tables.
+
+## Development and contributing
+
+- Work on the CLI/REPL/façade in `NybleJS/`; work on engine behavior in `third_party/ant/` (the submodule) and record the new submodule commit in the superproject.
+- Ant-side local commits are made on the submodule's `ant` branch and pushed there explicitly; the superproject then gets a `submodule: point ant to ...` commit.
+- Preserve the bridge rule: Ant headers only in `src/engine/ant_engine.c`. If a new Ant header must be visible, add a C shim, not a C++ include.
+- Keep the REPL crash-resilient: wrap eval/drain in `try`/`catch`, including `catch (...)`.
+- When unstubbing Ant modules, prefer mbedTLS/tlsuv paths and verify fail-closed behavior before adding permissive options.
+- `patches/tlsuv-win-ca-stores.patch` documents the Windows CA-store fix; keep it in sync with the submodule vendor change.
+- Build and smoke locally with the Zig/Meson recipe above; CI covers Ant only.
+- **Do not push to production/main unless explicitly asked.** Local commits and tags are fine.
+
+Before finalizing engine-side changes, run Ant's own preflight from `third_party/ant` (`maid preflight`) if available, then the focused test for the module you touched; broad build/spec runs may need approval.
+
+## FAQ
+
+**Why replace a working engine?**
+The v0 engine lacked the modern language surface and web APIs the browser needs. Ant Silver already targets WinterTC, has a JIT, streams, fetch/WebSocket, and a much broader spec baseline, with a small binary and fast cold start.
+
+**Is the old engine deleted?**
+No. `nyblejs-v0.7-final` / `339bfbe` preserves it, and the legacy sources are still in the tree for reference. They are simply not linked into v1.
+
+**Why a submodule instead of vendoring Ant?**
+To track Ant's `master` line (via the `ant` branch) with real commits, patches, and provenance — and to avoid release downloads.
+
+**Why mbedTLS and not BoringSSL?**
+BoringSSL is explicitly out of scope. The mbedTLS/tlsuv backend builds with Zig/mingw-w64 and lets us keep verification fail-closed while patching Windows CA-store loading.
+
+**Do I need MSYS2 or MSVC?**
+Neither. Use Zig or clang with the `x86_64-windows-gnu`/`x86_64-w64-mingw32` target; Meson/Ninja configure the Ant embed; the two shims in `NybleJS/build/` cover mingw-w64 gaps.
+
+**Is Node.js compat on?**
+In the `njs` CLI, yes by default (for script compatibility). In the runtime and in embedded `nyble::Engine`, no — pass `true` explicitly or use `--node-compat` if you need it. Web APIs do not depend on it.
+
+**Why does `--no-node-compat` show `typeof process === "undefined"`?**
+Because `bootstrap.c` gates `process`, `tty`, `events`, `fs`, and `Buffer` behind `ANT_RUNTIME_NODE_COMPAT`, and the ESM loader blocks `node:`/bare builtin resolution when it is off.
+
+**Is TLS verification optional?**
+Verification is on by default and fails closed. `rejectUnauthorized: false` exists for debug/compat via tlsuv's accept callback, but its scoping is still being audited; do not depend on it for production security decisions.
+
+**Can I embed multiple isolates?**
+Yes. Each `nyble::Engine` creates its own Ant isolate with its own global scope and GC arena; copy construction is disabled to keep ownership clear.
+
+**What happened to `nyble::Context` and `gHeap.rootTracer`?**
+Retired with v0. The v1 API is `nyble::Engine` plus the C ABI bridge, with a SpiderMonkey-like direction (explicit isolate ownership, no V8-style handle scopes).
+
+## License
+
+The Nyble project is licensed under [MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0); see the repository [LICENSE](../LICENSE). Ant Silver is MIT-licensed inside `third_party/ant` (see `third_party/ant/LICENSE.txt`), and vendored dependencies keep their own licenses.
