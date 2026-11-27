@@ -49,6 +49,9 @@ CXX = clang++
 endif
 TARGET_TRIPLE ?= x86_64-w64-mingw32
 endif
+# MSYS2 mingw-w64 provides taskschd.dll.a; Zig's bundled mingw-w64 headers do
+# not, and the GUIDs resolve from libant's own object files there.
+TASKSCHD_LIB = $(if $(filter 1,$(USE_ZIG)),,-ltaskschd)
 ANT_DIR ?= ../tools/ant
 endif
 
@@ -78,7 +81,7 @@ CFLAGS = $(TARGET_FLAG) -std=gnu2x -O2 $(LTO_FLAG) $(WARN) $(INCLUDES) -DNYBLE_A
 EXAMPLE_CXXFLAGS = $(TARGET_FLAG) -std=c++17 -O2 $(LTO_FLAG) $(WARN) $(EXAMPLE_INCLUDES)
 # pathcch_shim.o supplies PathCchCombine; sync_shim.o supplies WaitOnAddress.
 LDFLAGS = $(TARGET_FLAG) -O2 $(LTO_FLAG) -fuse-ld=lld -s -static-libstdc++ -static-libgcc
-ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -loleaut32 -luuid -lshell32 -ladvapi32 -lbcrypt -lwinmm -lnormaliz "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic"
+ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghelp -lole32 -loleaut32 $(TASKSCHD_LIB) -luuid -lshell32 -ladvapi32 -lbcrypt -lwinmm -lnormaliz "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic"
 WIN_SHIMS = build/pathcch_shim.o build/sync_shim.o
 NJS = njs.exe
 EMBED_SM = build/embed_sm.exe
