@@ -23,7 +23,27 @@ Nyble
 │       └── upm                   Ant package manager
 ```
 
-Node compatibility is opt-in; the web/WinterTC surface is the baseline.
+Build systems and tools (also a dependency view, not a directory layout):
+
+```text
+Nyble build
+├── git + submodules              source checkout and Ant master-line tracking
+├── GNU make                      NybleJS driver (njs, embed examples, ant-posix)
+├── Meson + Ninja                 Ant configure/build, including the embed dist
+│   ├── CMake                     vendored mbedTLS subproject
+│   ├── pkg-config                libant.pc include/link flags for hosts
+│   ├── Node.js 22 + npm          Ant generated built-in JS headers
+│   └── Python 3 + pip            Meson installation on POSIX CI
+├── clang / clang++               native POSIX and mingw-w64 Windows compiler
+├── Zig 0.16.0                    optional mingw-w64 driver (USE_ZIG=1)
+├── lld                           Windows static link driver
+├── binutils / LLVM tools         ar -M, nm -P, llvm-nm, llvm-libtool-darwin
+└── GitHub Actions                CI orchestration
+    ├── ubuntu-latest, macos-latest   native POSIX builds + JS tests
+    └── windows-latest + MSYS2 UCRT64 libant-mingw64 artifact + njs smoke
+```
+
+No MSVC, BoringSSL, WSL, or Rust bootstrap is required. Node compatibility is opt-in; the web/WinterTC surface is the baseline.
 
 # Frequently Asked Questions (FAQ)
 
