@@ -79,7 +79,10 @@ NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 WINFLEXBISON_VERSION ?= 2.5.25
 WINFLEXBISON_URL ?= https://github.com/lexxmark/winflexbison/releases/download/v$(WINFLEXBISON_VERSION)/win_flex_bison-$(WINFLEXBISON_VERSION).zip
 
-MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Degl=enabled -Dgles1=disabled -Dgles2=enabled
+# Meson's release preset uses -O3, which makes clang run out of memory on
+# Mesa's generated glapi trace file. -O1 keeps the local software build
+# reproducible on memory-constrained machines.
+MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Degl=enabled -Dgles1=disabled -Dgles2=enabled -Doptimization=1
 
 DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 LAYOUT_SMOKE_BIN := $(CURDIR)/$(BUILD)/layout-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
@@ -189,7 +192,7 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -E make_directory $(NYBLER_TMP)
 	$(CMAKE) -E make_directory $(PREFIX)/bin
-	$(if $(filter Windows_NT,$(OS)),$(CMAKE) -E echo @$(PYTHON) %* > $(PREFIX)/bin/python3.bat,)
+	$(if $(filter Windows_NT,$(OS)),$(PYTHON) -c "import os,sys; d=r'$(PREFIX)/bin'; v='python%d.%d.bat' % (sys.version_info[0], sys.version_info[1]); data='@' + sys.executable + ' %*\n'; open(os.path.join(d, 'python3.bat'), 'w').write(data); open(os.path.join(d, v), 'w').write(data)",)
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) setup $(MESA_BUILD) $(MESA_SRC) \
 		--prefix=$(PREFIX) \
 		--buildtype=release \

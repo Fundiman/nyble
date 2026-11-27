@@ -119,6 +119,16 @@ NYBLER_API NyblerResult nybler_init(
   NyblerInstance **out_instance
 );
 NYBLER_API void nybler_shutdown(NyblerInstance *instance);
+NYBLER_API NyblerResult nybler_instance_request_adapter(
+  NyblerInstance *instance,
+  NyblerAdapter **out_adapter
+);
+NYBLER_API void nybler_adapter_release(NyblerAdapter *adapter);
+NYBLER_API NyblerResult nybler_adapter_request_device(
+  NyblerAdapter *adapter,
+  NyblerDevice **out_device
+);
+NYBLER_API void nybler_device_release(NyblerDevice *device);
 
 /* DOM: parsed documents own their nodes. Node handles are borrowed and stay
  * valid until nybler_document_release(). */

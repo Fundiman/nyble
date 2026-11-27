@@ -71,8 +71,10 @@ with, for example, `make -C NybleR tint NYBLER_JOBS=1`.
 
 The default Windows Mesa configuration uses `softpipe` with Vulkan disabled
 until a local `llvm-config` is available; llvmpipe and lavapipe remain the
-intended performance paths. `MESA_ARGS` can be overridden to enable them when
-LLVM development tools are present.
+intended performance paths. It also forces Meson's optimization level to `-O1`
+because Mesa's generated `api_trace.c` makes clang exhaust memory at `-O3`.
+`MESA_ARGS` can be overridden to enable LLVM drivers or a different
+optimization level when the local toolchain has enough memory.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.
