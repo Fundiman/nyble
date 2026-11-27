@@ -25,8 +25,8 @@ The NybleJS front end is intentionally unchanged: same `njs` binary name, same J
 - [Building](#building)
   - [Prerequisites](#prerequisites)
   - [Get the Ant submodule](#get-the-ant-submodule)
-  - [Build the Ant embed dist locally (Meson + Zig)](#build-the-ant-embed-dist-locally-meson--zig)
-  - [Build njs.exe](#build-njsexe)
+  - [Build the Ant embed dist (POSIX / Windows)](#build-the-ant-embed-dist-posix--windows)
+  - [Build njs / njs.exe](#build-njs--njsexe)
   - [Windows shims](#windows-shims)
   - [Cache and temp locations](#cache-and-temp-locations)
   - [Verify the build](#verify-the-build)
@@ -213,7 +213,7 @@ With node compat off, browser APIs are unchanged; only the Node-flavored globals
 - TLS verification **fails closed**: a self-signed host (`self-signed.badssl.com`) is rejected. Valid certificates work (`example.com:443` connects).
 - Windows certificate loading patches tlsuv to include the `ROOT`, `CA`, and `AuthRoot` system stores; the patch lives in `patches/tlsuv-win-ca-stores.patch`.
 - `rejectUnauthorized: false` is applied per connection via tlsuv stream state; it never mutates the shared TLS context, so one lax connection cannot weaken a later strict one. `getProtocol()` reports the negotiated version and peer certificate/authorization info is exposed by the Node shim. Default verification remains on.
-- `src/modules/crypto.c` is mbedTLS-backed and covers the Node/WebCrypto basics: `random*`, `getRandomValues`, `createHash`/`createHmac`, `createCipheriv`/`createDecipheriv`, `pbkdf2`/`scrypt`, and `subtle.digest`, plus `subtle.importKey`/`generateKey`/`exportKey` (raw HMAC/AES-GCM), `deriveBits`, `sign`/`verify`, `encrypt`/`decrypt`, and `timingSafeEqual`. Asymmetric algorithms and non-raw key formats are not implemented.
+- `src/modules/crypto.c` is mbedTLS-backed and covers Node/WebCrypto secrets (`random*`, `getRandomValues`, `createHash`/`createHmac`, `createCipheriv`/`createDecipheriv`, `pbkdf2`/`scrypt`, `subtle.digest`, raw HMAC/AES-GCM keys, `deriveBits`, `sign`/`verify`, `encrypt`/`decrypt`, `timingSafeEqual`) **and** standard asymmetric WebCrypto: RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP, ECDSA, ECDH, and AES-KW. JWK, SPKI, and PKCS#8 import/export, `wrapKey`/`unwrapKey`, and `deriveKey` are available. Public/private usages are split on generated pairs.
 - `src/http/websocket.c` has its SHA1 accept-key and frame logic unstubbed for `ANT_MBEDTLS_TLS_BACKEND`.
 - `src/cli/registry.c` is **intentionally still a stub**; registry parity is not claimed.
 
@@ -238,14 +238,14 @@ With node compat off, browser APIs are unchanged; only the Node-flavored globals
 
 ### Prerequisites
 
-- **clang** (`clang`/`clang++`) or **Zig 0.16.0** providing `zig cc` / `zig c++` with the `x86_64-windows-gnu` target.
-- **Meson + Ninja** for configuring and building the Ant embed.
-- `git` with submodule support.
-- **No MSYS2 installation required.** Ant upstream documents an MSYS2/MINGW64 path; NybleJS does not use it. We also do not use MSVC — "we CANNOT STAND MSVC!!" — everything targets mingw-w64.
-- **No Rust porting.** The embed archive already contains what Ant needs; do not translate anything to Rust.
+- **clang** (`clang`/`clang++`) on POSIX, or **clang targeting mingw-w64** / **Zig 0.16.0** (`zig cc`, `zig c++` with `--target=x86_64-windows-gnu`) on Windows.
+- **Meson + Ninja**, CMake, pkg-config, `binutils`, and Node.js 22 + npm for configuring and building the Ant embed.
+- `git` with submodule support and GNU `make`.
+- **No MSYS2, WSL, or MSVC dependency.** Windows builds target mingw-w64; POSIX builds are native. "we CANNOT STAND MSVC!!"
+- **No Rust porting or Rust bootstrap.** The POSIX recipe uses `-Dsandbox=disabled`; do not translate anything to Rust.
 - **No BoringSSL.** Use the mbedTLS TLS backend.
 
-Current supported local target: **Windows x86_64, mingw-w64 ABI**. The CLI/REPL sources also carry POSIX `termios`/`isatty` shims, but the shipped Ant embed archive is Windows-only; a POSIX host needs a POSIX `libant.a`.
+Supported local targets: **Windows x86_64 (mingw-w64 ABI)** and **native Linux/macOS**. No POSIX `libant.a` is shipped; build it locally with `make ant-posix`.
 
 ### Get the Ant submodule
 
@@ -262,7 +262,38 @@ git submodule status
 
 Do not download release artifacts. If the submodule is empty, the first command is the fix.
 
-### Build the Ant embed dist locally (Meson + Zig)
+### Build the Ant embed dist (POSIX / Windows)
+
+#### POSIX (native, no WSL/MSYS2)
+
+From `NybleJS/`:
+
+```bash
+make ant-posix
+```
+
+That configures `third_party/ant/build-embed-posix` with:
+
+```bash
+-Db_lto=false -Dc_std=gnu2x -Dtls_backend=mbedtls \
+-Dtemporal=disabled -Dencoding_rs=disabled \
+-Dsandbox=disabled -Dpgo=disabled -Dcodesign=false
+```
+
+`sandbox=disabled` avoids the Rust bootstrap; `b_lto=false` keeps native objects in the archive; `codesign=false` makes macOS CI deterministic. On macOS, install LLVM (`brew install llvm`) so `llvm-nm` is available to the `embed` target. No BoringSSL is downloaded or built.
+
+Result: `third_party/ant/build-embed-posix/libant/` with the same layout as the Windows dist. Equivalent raw commands:
+
+```bash
+cd third_party/ant
+meson setup build-embed-posix \
+  -Db_lto=false -Dc_std=gnu2x -Dtls_backend=mbedtls \
+  -Dtemporal=disabled -Dencoding_rs=disabled \
+  -Dsandbox=disabled -Dpgo=disabled -Dcodesign=false
+meson compile -C build-embed-posix embed
+```
+
+#### Windows / mingw-w64 (Meson + Zig)
 
 Use a separate build tree with LTO off so the archive contains native objects instead of LLVM bitcode. The exact options used locally are below; they are also recorded in `third_party/ant/build-embed-zig/meson-info/`.
 
@@ -301,13 +332,21 @@ Why these options:
 | `-Dtemporal=disabled` | Avoids the Temporal Rust dependency for now |
 | `-Dencoding_rs=disabled` | Avoids the encoding_rs Rust dependency for now |
 
-### Build njs.exe
+### Build njs / njs.exe
 
-The Makefile expects an embed dist at `ANT_DIR` (default `../tools/ant`) containing `lib/libant.a` and `include/`. Point it at the tree you just built:
+The Makefile auto-detects the host with `uname`. POSIX hosts use native `clang`/`clang++` and default `ANT_DIR` to the `make ant-posix` output; Windows hosts keep the mingw-w64 path and default `ANT_DIR` to `../tools/ant`. Both expect `lib/libant.a` and `include/`. Override `ANT_DIR` to point at a different dist:
+
+```bash
+# POSIX (after `make ant-posix`)
+cd NybleJS
+make
+make embed   # also builds build/embed_sm and build/embed_engine
+```
 
 ```powershell
+# Windows / mingw-w64
 cd NybleJS
-make ANT_DIR=../third_party/ant/build-embed-zig/libant
+make ANT_DIR=../third_party/ant/build-embed-zig/libant USE_ZIG=1
 ```
 
 Equivalent when using Zig as the driver directly (paths adjusted for your checkout):
@@ -379,7 +418,12 @@ TLS smoke checks (network required):
 
 ### CI scope
 
-CI is used to build/verify **Ant only**. There is no full NybleJS smoke in CI yet; link-and-run verification is local for now. Do not add a full `njs` smoke job without discussing it first.
+There are two CI paths:
+
+- `libant.yml` builds the Windows `libant-mingw64` artifact with clang/mingw-w64 and smoke-links `njs`.
+- `nyblejs-posix.yml` builds native Linux/macOS `libant.a`, `njs`, and both embed examples, then runs the focused WebCrypto JS tests (`test_webcrypto_generate_export.cjs`, `test_webcrypto_asymmetric.cjs`, `examples/spec/crypto.js`).
+
+Interactive REPL behavior (TTY keybindings/history) is still validated locally/manually; piped REPL and CLI smokes run in CI.
 
 ---
 
@@ -401,7 +445,7 @@ You get a colored banner, `> ` prompt, and as-you-type syntax highlighting:
 - punctuation — gray
 - identifiers — white
 
-Incomplete input is detected heuristically (unbalanced `{`, `(`, `[`, or a trailing `+ - * / , .`), and the prompt switches to `... ` until the construct closes. Type `exit` on an empty line to quit, or press Ctrl+D.
+Incomplete input is detected heuristically (unbalanced `{`, `(`, `[`, or a trailing `+ - * / , .`), and the prompt switches to `... ` until the construct closes. Type `exit` on an empty line to quit, or press Ctrl+D. Up/Down recalls previously submitted lines from the in-memory history buffer (no history file is written).
 
 ### Run a file
 
@@ -510,7 +554,7 @@ Always lands: an ASCII cat plus a randomly picked entry from `src/cats.h` — an
 | Backspace | Delete character before cursor |
 | Delete | Delete character at cursor |
 | Enter / Return | Submit the current input |
-| Up / Down | Recognized but not yet wired to a history buffer |
+| Up / Down | Recall previous / next submitted line from the in-memory history buffer |
 
 The Windows implementation uses `ReadConsoleInput` with `ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT` turned off while the prompt is active, then restores the original console mode on exit.
 
@@ -711,11 +755,12 @@ The C++ layer uses RAII: `RootedValue` unroots on destruction, supports move sem
 ### Host link checklist
 
 1. Compile C++: `src/main.cpp` (CLI only), `src/engine/ant_engine.cpp`. Use C++17.
-2. Compile C: `src/engine/ant_engine.c`, `src/engine/nyble_sm.c`, `build/pathcch_shim.c`, `build/sync_shim.c`. Use C (gnu2x is what Ant expects).
-3. Include dirs: `src/`, `src/engine`, `build-embed-zig/libant/include`, `build-embed-zig/libant/include/ant`.
-4. Link `libant.a` with a C++ driver (`zig c++`/`clang++`).
-5. Add Windows system libs from `ANT_SYS_LIBS` in `NybleJS/Makefile`.
-6. Do not link the legacy `*.o` files at the NybleJS root (`compiler.o`, `vm.o`, `context.o`, ...). They belong to the retired v0 engine.
+2. Compile C: `src/engine/ant_engine.c`, `src/engine/nyble_sm.c`. On Windows also compile `build/pathcch_shim.c` and `build/sync_shim.c`. Use C (gnu2x is what Ant expects) and define `NYBLE_ANT_PACKAGED` for the embed dist headers.
+3. Include dirs: `src/`, `src/engine`, `<embed-dist>/include`, `<embed-dist>/include/ant`.
+4. Link `libant.a` with a C++ driver (`clang++`, or `zig c++ --target=x86_64-windows-gnu`).
+5. Add platform system libs from `ANT_SYS_LIBS` in `NybleJS/Makefile` (pkg-config `libant` on POSIX; mingw-w64 libs plus shims on Windows).
+6. The `embed` make target builds both SpiderMonkey-style and `nyble::Engine` examples without `src/main.cpp`.
+7. Do not link the legacy `*.o` files at the NybleJS root (`compiler.o`, `vm.o`, `context.o`, ...). They belong to the retired v0 engine.
 
 ---
 
@@ -725,13 +770,12 @@ The C++ layer uses RAII: `RootedValue` unroots on destruction, supports move sem
 
 - `src/cli/registry.c` in Ant is intentionally stubbed; no registry parity.
 - TLS: verification is fail-closed by default, `getProtocol()` reports the negotiated version, and `rejectUnauthorized: false` is per connection. Peer certificate/authorization info is exposed, but broader TLS plumbing is not claimed to be fully Node-equivalent.
-- Crypto: mbedTLS-backed Node/WebCrypto basics are implemented (hashes, HMAC, AES-GCM/Cipher, PBKDF2/scrypt, random helpers, raw HMAC/AES-GCM keys, sign/verify, encrypt/decrypt, `deriveBits`, `timingSafeEqual`). Asymmetric algorithms, JWK/other key formats, and key wrapping are still missing.
+- Crypto: mbedTLS-backed Node/WebCrypto covers hashes, HMAC, AES-GCM/Cipher, PBKDF2/scrypt, random helpers, raw and asymmetric keys, JWK/SPKI/PKCS#8 import/export, key wrapping, and `deriveKey`/`deriveBits`. Full Node `crypto` API parity is not claimed.
 - WebSocket/registry behavior beyond the unstubbed SHA1/frame paths is not fully verified against Node.
 - Node compatibility surface is intentionally partial: `Buffer`, `fs`, `process`, `tty`, `events`, and node/bare builtin resolution are gated; broader Node APIs are not guaranteed.
 - Local embed disables `temporal` and `encoding_rs`; those Ant features are not in the shipped `njs.exe` yet.
-- POSIX builds: the REPL now has `isatty`/`termios` shims for `stdinIsTTY()`, raw mode and arrow/Home/End/Delete keys, but no POSIX `libant.a` is shipped; you must build Ant for the POSIX target yourself. Up/Down still lack a history buffer on both platforms.
+- POSIX builds: the REPL has `isatty`/`termios` shims for raw mode, arrow/Home/End/Delete keys, and Up/Down history. There is no shipped POSIX `libant.a`; build it locally with `make ant-posix` (or the equivalent Meson commands above).
 - `-engine jit` is a stub that errors out.
-- Up/Down arrow keys are parsed in the REPL but no history buffer is attached.
 
 **No longer problems (v0.x claims that are obsolete):**
 
