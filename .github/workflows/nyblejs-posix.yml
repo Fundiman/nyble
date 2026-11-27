@@ -1,0 +1,81 @@
+name: nyblejs-posix
+
+# Native POSIX build + focused JavaScript tests. No MSYS2, no WSL, no MSVC,
+# no BoringSSL, and no Rust bootstrap (sandbox=disabled).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/nyblejs-posix.yml"
+      - "NybleJS/Makefile"
+      - "NybleJS/src/**"
+      - "NybleJS/examples/**"
+      - "third_party/ant"
+      - "patches/**"
+  pull_request:
+    paths:
+      - ".github/workflows/nyblejs-posix.yml"
+      - "NybleJS/Makefile"
+      - "NybleJS/src/**"
+      - "NybleJS/examples/**"
+      - "third_party/ant"
+      - "patches/**"
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout (with Ant submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake pkg-config binutils clang lld
+          python3 -m pip install --user meson
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install meson ninja cmake llvm pkg-config
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Build POSIX libant, njs, and embed examples
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          make -C NybleJS ant-posix
+          make -C NybleJS -j2
+          make -C NybleJS embed -j2
+
+      - name: Run WebCrypto JavaScript tests
+        working-directory: third_party/ant
+        run: |
+          ./build-embed-posix/ant tests/test_webcrypto_generate_export.cjs
+          ./build-embed-posix/ant tests/test_webcrypto_asymmetric.cjs
+          ./build-embed-posix/ant examples/spec/crypto.js
+
+      - name: Run CLI and embedding smokes
+        run: |
+          ./NybleJS/njs -c "console.log(1 + 1)"
+          ./NybleJS/njs --no-node-compat -c "console.log(typeof process)"
+          ./NybleJS/build/embed_sm
+          ./NybleJS/build/embed_engine
