@@ -26,7 +26,7 @@ ANT_SYS_LIBS = -lws2_32 -lcrypt32 -lsecur32 -luserenv -lntdll -liphlpapi -ldbghe
 LDFLAGS = --target=$(TARGET_TRIPLE) -O2 $(LTO_FLAG) -fuse-ld=lld -s -static-libstdc++ -static-libgcc
 
 SRCS_CPP = src/main.cpp src/engine/ant_engine.cpp
-SRCS_C   = src/engine/ant_engine.c
+SRCS_C   = src/engine/ant_engine.c src/engine/nyble_sm.c
 OBJS_CPP = $(SRCS_CPP:src/%.cpp=build/%.o)
 OBJS_C   = $(SRCS_C:src/%.c=build/%.c.o)
 OBJS     = $(OBJS_CPP) $(OBJS_C)

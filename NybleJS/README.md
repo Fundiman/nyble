@@ -52,7 +52,7 @@ The NybleJS front end is intentionally unchanged: same `njs` binary name, same J
   - [Isolate model and lifetime rules](#isolate-model-and-lifetime-rules)
   - [Host bindings and `rawIsolate()`](#host-bindings-and-rawisolate)
   - [Node compat from a host](#node-compat-from-a-host)
-  - [API direction: SpiderMonkey, not V8](#api-direction-spidermonkey-not-v8)
+  - [SpiderMonkey-style API reference (implemented)](#spidermonkey-style-api-reference-implemented)
   - [Migrating from the v0.x `Context` API](#migrating-from-the-v0x-context-api)
   - [Host link checklist](#host-link-checklist)
 - [Compatibility and known gaps](#compatibility-and-known-gaps)
@@ -91,7 +91,7 @@ The browser-side goal is a small, embeddable, web-first JavaScript runtime. Node
 | Async | Timer stubs only | Event loop, microtasks, promises, timers, streams, fetch/WebSocket |
 | TLS | None | mbedTLS/tlsuv backend, verification fail-closed; no BoringSSL |
 | GC | Process-wide mark-sweep heap, one context per process | Per-isolate Ant GC via `Ant_Create()` |
-| Embedding API | V8-flavored `nyble::Context`, `Value`, `gHeap.rootTracer` | `nyble::Engine` façade; string-in/string-out `eval()` + `rawIsolate()` |
+| Embedding API | V8-flavored `nyble::Context`, `Value`, `gHeap.rootTracer` | SpiderMonkey-style `NyRuntime`/`NyContext`/rooted `NyValue` C API + C++ RAII wrappers; `nyble::Engine` façade remains for simple hosts |
 | Build | `g++ -std=c++17 src/*.cpp`, MSYS2/WSL | clang/Zig targeting mingw-w64, Meson/Ninja for Ant, no MSYS2 dependency |
 | Node compat | Not applicable | Off by default in runtime/embed; on by default in the CLI |
 | Version | v0.7 (AttentionIsAllYouNeed) | v1.0 (Biryani) |
@@ -103,8 +103,10 @@ NybleJS/
 ├── src/
 │   ├── main.cpp                  CLI, REPL, syntax highlighting, flags
 │   ├── cats.h                    --meow wisdom/cat-fact database
-│   ├── nyblejs.h                 public embedding header
+│   ├── nyblejs.h                 public embedding header (all APIs)
 │   └── engine/
+│       ├── nyble_sm.h/.c         SpiderMonkey-style C API
+│       ├── nyble_sm.hpp          C++ RAII wrappers (Runtime/Context/RootedValue)
 │       ├── ant_engine.h/.cpp     C++ façade: nyble::Engine
 │       ├── ant_engine_c.h        C-ABI declarations (safe from C++)
 │       └── ant_engine.c          ONLY file that sees Ant's C headers
@@ -544,41 +546,51 @@ Uncaught Error: boom
 ### Header layering
 
 ```cpp
-#include "src/nyblejs.h"        // public header; forwards to engine/ant_engine.h
+#include "src/nyblejs.h"
 ```
 
-`nyblejs.h` is intentionally tiny: it includes `engine/ant_engine.h`, which declares `nyble::Engine` using only standard C++ types (`std::string`, `std::vector`, `void*`). Ant's C headers are hidden behind `engine/ant_engine.c`.
+`nyblejs.h` is the single public header. It exposes:
 
-### Quick start (C++)
+- `engine/nyble_sm.h` — the **preferred** SpiderMonkey-style C API (`NyRuntime`, `NyContext`, rooted `NyValue` handles, explicit operations).
+- `engine/nyble_sm.hpp` — C++ RAII wrappers (`nyble::sm::Runtime`, `Context`, `RootedValue`).
+- `engine/ant_engine.h` — the small `nyble::Engine` façade still used by the CLI and simple string-in/string-out hosts.
+
+Ant's C-only headers are never visible in these headers. `engine/ant_engine.c` is the sole bridge that sees them; the SpiderMonkey-style API goes through that bridge with integer value handles.
+
+### Quick start (SpiderMonkey-style C++)
 
 ```cpp
 #include <iostream>
 #include "src/nyblejs.h"
 
 int main() {
-    // One Engine == one Ant isolate == one JS global scope.
-    // argc/argv are forwarded to Ant's runtime init; 0/nullptr is fine.
-    // heapBytes = 0 lets Ant choose its arena.
-    // Final arg = node compat; false/off is the embed default.
-    nyble::Engine engine(0, nullptr, 0, /*nodeCompat=*/false);
+    nyble::sm::Runtime rt(0, /*nodeCompat=*/false);  // web-first default
+    nyble::sm::Context cx(rt);
+    if (!rt.valid() || !cx.valid()) return 1;
 
-    // Same mechanism as CLI -Dkey=value.
-    engine.setProp("app", "embed-demo");
+    nyble::sm::RootedValue two = cx.evaluate("1 + 1");
+    std::cout << two.toString() << '\n';  // 2
 
-    std::string out;
-    if (!engine.eval("console.log('hello from Ant'); 1 + 1", out)) {
-        for (const auto& err : engine.errors())
-            std::cerr << "Uncaught " << err << '\n';
-        return 1;
-    }
+    nyble::sm::RootedValue fn = cx.evaluate("(s) => s.toUpperCase()");
+    nyble::sm::RootedValue arg = cx.string("hi");  // keep it rooted for the call
+    nyble::sm::RootedValue result = cx.call(fn, cx.undefined(), {arg.get()});
+    std::cout << result.toString() << '\n';  // "HI"
 
-    std::cout << out << '\n';       // 2
-    engine.drainEventLoop();        // let pending jobs/timers run
+    cx.drainJobQueue();
     return 0;
 }
 ```
 
-A buildable version of this example lives in `examples/embed_engine.cpp`. Compile `src/main.cpp` **not at all** for a host build. Compile `src/engine/ant_engine.cpp` (C++) and `src/engine/ant_engine.c` (C), then link `libant.a` and the Windows system libraries listed in the Makefile. See [Host link checklist](#host-link-checklist).
+A buildable version is `examples/embed_sm.cpp`. For hosts that only want "run this string and give me a string", the `nyble::Engine` façade is still available (`examples/embed_engine.cpp`):
+
+```cpp
+nyble::Engine engine(0, nullptr, 0, /*nodeCompat=*/false);
+std::string out;
+bool ok = engine.eval("1 + 1", out);
+engine.drainEventLoop();
+```
+
+Compile `src/main.cpp` **not at all** for a host build. Compile the engine sources listed in [Host link checklist](#host-link-checklist) and link `libant.a`.
 
 `test_link.cpp` and `test_context.cpp` at the NybleJS root are legacy v0.x tests against the retired `nyble::VM`/`nyble::Context` API. They are kept for reference but do not build in v1.
 
@@ -649,38 +661,53 @@ nyble::Engine browser(0, nullptr, 0, /*nodeCompat=*/false);  // web APIs only (r
 
 The flag is applied at isolate creation, before module bootstrap. It cannot be flipped mid-life; create a second engine if you need both shapes.
 
-### API direction: SpiderMonkey, not V8
+### SpiderMonkey-style API reference (implemented)
 
-The v0 README described a V8-style `nyble::Context` with `HandleScope`-like GC rooting (`gHeap.rootTracer`) and `Persistent`-style lifetime thinking. That API is gone in v1.
+The v0 `nyble::Context` was V8-flavored (`HandleScope`, `gHeap.rootTracer`, implicit rooting). v1 replaces it with an actual SpiderMonkey-shaped API — not just a naming direction — implemented over the Ant bridge:
 
-The v1 direction is deliberately **SpiderMonkey-flavored** rather than V8-flavored:
+- `NyRuntime` / `nyble::sm::Runtime` — engine configuration, analogous to `JSRuntime`.
+- `NyContext` / `nyble::sm::Context` — one isolate/global scope, analogous to `JSContext`.
+- `NyValue` / `nyble::sm::RootedValue` — explicit rooted value handles, analogous to `JS::RootedValue`/`JS::HandleValue`. Handles are kept alive on a private roots object in the isolate global.
+- `Ny_Evaluate` / `Context::evaluate()` — analogous to `JS_EvaluateScript`/`JS::Evaluate`.
+- `Ny_GetProperty`, `Ny_SetProperty`, `Ny_Call` — analogous to `JS_GetProperty`, `JS_SetProperty`, `JS_Call`.
+- `Ny_HasPendingException`, `Ny_ClearPendingException` — analogous to `JS_GetPendingException`/`JS_ClearPendingException`.
+- `Ny_DrainJobQueue` — drains promise jobs/timers after evaluation.
 
-- one explicit isolate per engine (like `JSContext`/`JSRuntime` ownership),
-- host-held values are explicit rather than implicit handle scopes,
-- completion values are rendered with Ant's `Describe` helper instead of V8-style conversion gymnastics,
-- the public C++ surface stays small; the C ABI (`ant_engine_c.h`) is the stable boundary for hosts.
+Declared in `src/engine/nyble_sm.h` (C) and `src/engine/nyble_sm.hpp` (C++), implemented in `src/engine/nyble_sm.c` on top of the C bridge:
 
-Today the stable, supported surface is the string-in/string-out `nyble::Engine` façade documented above. Don't design new code against `Context`, `Value`, or `gHeap.rootTracer` from v0.x.
+| C API | Contract |
+|---|---|
+| `Ny_NewRuntime(size_t heap_bytes, int node_compat)` / `Ny_DestroyRuntime` | Create/destroy runtime configuration. Node compat off with `0`. |
+| `Ny_NewContext(NyRuntime*, int argc, char** argv)` / `Ny_DestroyContext` | Create/destroy one Ant isolate + global scope. |
+| `Ny_Undefined`, `Ny_Null`, `Ny_Boolean`, `Ny_Number`, `Ny_String` | Create rooted values; release with `Ny_FreeValue`. |
+| `Ny_Evaluate(cx, src, len)` | Evaluate script; `NY_VALUE_INVALID` on error, message via `Ny_GetErrorMessage`/`Ny_HasPendingException`. |
+| `Ny_GetProperty`, `Ny_SetProperty`, `Ny_Call` | Property access and function invocation. |
+| `Ny_ToString`, `Ny_ToNumber`, `Ny_TypeOf` | Display string (malloc'd), numeric coercion, type tag. |
+| `Ny_GetErrorMessage`, `Ny_HasPendingException`, `Ny_ClearPendingException` | Error/pending-exception handling. |
+| `Ny_DrainJobQueue`, `Ny_FreeValue`, `Ny_Version` | Job draining, handle release, version string. |
+
+The C++ layer uses RAII: `RootedValue` unroots on destruction, supports move semantics, and is non-copyable. Keep a `RootedValue` alive for as long as you pass its handle to another call, and destroy all rooted values before their `Context`.
 
 ### Migrating from the v0.x `Context` API
 
 | Old (v0.x) | New (v1) |
 |---|---|
-| `nyble::Context ctx;` | `nyble::Engine engine(0, nullptr, 0, false);` |
-| `ctx.evaluate(src, nyble::Value& out)` | `engine.eval(src, std::string& out)` |
-| `ctx.define("f", native)` | Install natives via `rawIsolate()` in C, or set `Nyble.props` for simple strings |
-| `ctx.call(ctx.get("f"), args)` | Evaluate JS that calls `f`, or use Ant's C API on `rawIsolate()` |
-| `ctx.parseErrors()` | `engine.errors()` (JS error text; parse errors are handled inside Ant) |
-| `gHeap.rootTracer = ...` | Not needed; isolate owns its GC/stack base |
+| `nyble::Context ctx;` | `nyble::sm::Runtime rt; nyble::sm::Context cx(rt);` (or `nyble::Engine` for simple string eval) |
+| `ctx.evaluate(src, nyble::Value& out)` | `nyble::sm::RootedValue out = cx.evaluate(src);` then `out.toString()` / `out.toNumber()` |
+| `ctx.define("f", native)` | Install natives in C via `nyble_engine_isolate()`, or set globals with `Ny_SetProperty` |
+| `ctx.call(ctx.get("f"), args)` | `cx.call(f, this_val, {arg.get(), ...})` |
+| `ctx.get("name")` | `cx.getProperty(global, "name")` |
+| `ctx.parseErrors()` | `cx.errorMessage()` / `cx.pendingException(msg)` |
+| `gHeap.rootTracer = ...` | Not needed; `RootedValue` handles are rooted on the isolate |
 | `setEngine`/`setVmThreshold`/`lastEngine` | Removed; Ant handles execution strategy internally |
 | `nyble::VM` / `nyble::Interpreter` | Removed from the build; historical sources only |
-| `throw NybleRuntimeError(...)` from natives | Use Ant's C API to throw on the isolate; the façade reports it through `errors()` |
+| `throw NybleRuntimeError(...)` from natives | Use Ant's C API to throw on the isolate; errors surface through the C/C++ error accessors |
 
 ### Host link checklist
 
 1. Compile C++: `src/main.cpp` (CLI only), `src/engine/ant_engine.cpp`. Use C++17.
-2. Compile C: `src/engine/ant_engine.c`, `build/pathcch_shim.c`, `build/sync_shim.c`. Use C (gnu2x is what Ant expects).
-3. Include dirs: `src/`, `build-embed-zig/libant/include`, `build-embed-zig/libant/include/ant`.
+2. Compile C: `src/engine/ant_engine.c`, `src/engine/nyble_sm.c`, `build/pathcch_shim.c`, `build/sync_shim.c`. Use C (gnu2x is what Ant expects).
+3. Include dirs: `src/`, `src/engine`, `build-embed-zig/libant/include`, `build-embed-zig/libant/include/ant`.
 4. Link `libant.a` with a C++ driver (`zig c++`/`clang++`).
 5. Add Windows system libs from `ANT_SYS_LIBS` in `NybleJS/Makefile`.
 6. Do not link the legacy `*.o` files at the NybleJS root (`compiler.o`, `vm.o`, `context.o`, ...). They belong to the retired v0 engine.
@@ -858,7 +885,7 @@ Verification is on by default and fails closed. `rejectUnauthorized: false` exis
 Yes. Each `nyble::Engine` creates its own Ant isolate with its own global scope and GC arena; copy construction is disabled to keep ownership clear.
 
 **What happened to `nyble::Context` and `gHeap.rootTracer`?**
-Retired with v0. The v1 API is `nyble::Engine` plus the C ABI bridge, with a SpiderMonkey-like direction (explicit isolate ownership, no V8-style handle scopes).
+Retired with v0. The v1 API is the SpiderMonkey-style `NyRuntime`/`NyContext`/`RootedValue` surface (C and C++), backed by the C bridge. `nyble::Engine` remains as the tiny string-in/string-out façade used by the CLI. There are no V8-style handle scopes or `gHeap.rootTracer` globals.
 
 ## License
 
