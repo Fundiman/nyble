@@ -9,7 +9,7 @@ Most browsers need literal super computers to compile; Nyble does not.
   <summary><b>1. How do I build this project?</b></summary>
   <br>
 
-  Each component SHOULD have a Makefile - run `make` to build it. 
+  Each component SHOULD have a Makefile — run `make` to build it. 
 </details>
 
 <details>
