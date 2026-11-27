@@ -108,17 +108,18 @@ $(TINT_STAMP): $(DEPOT_TOOLS)
 		-DTINT_ENABLE_INSTALL=ON
 	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --parallel $(NYBLER_JOBS)
 	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --build $(TINT_BUILD) --target tint_utils_bytes --parallel $(NYBLER_JOBS)
-	$(CMAKE) --install $(TINT_BUILD)
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(CMAKE) --install $(TINT_BUILD)
 	$(CMAKE) -E touch $@
 
 $(MESA_STAMP):
 	$(CMAKE) -E make_directory $(STAMP_DIR)
-	$(MESON) setup $(MESA_BUILD) $(MESA_SRC) \
+	$(CMAKE) -E make_directory $(NYBLER_TMP)
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) setup $(MESA_BUILD) $(MESA_SRC) \
 		--prefix=$(PREFIX) \
 		--buildtype=release \
 		$(MESA_ARGS)
-	$(MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
-	$(MESON) install -C $(MESA_BUILD)
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) compile -C $(MESA_BUILD) -j $(NYBLER_JOBS)
+	TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
 $(NYBLER_STAMP):
