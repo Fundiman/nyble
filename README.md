@@ -1,3 +1,7 @@
+> [!NOTE]
+> This branch is a modified version of [AntJS](https://github.com/theMackabu/ant) — due to some limitations and weird structure, we had to create a separate branch for `libant`.
+> It's temporary; I'll try to find a much better way to do this.
+
 # 🐜 Ant
 
 _An ant carries 50× its weight. So does this one._
