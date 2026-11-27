@@ -6,9 +6,9 @@
 SHELL := /bin/sh
 
 ifeq ($(OS),Windows_NT)
-TINT_GCLIENT = cmd.exe /c "set PATH=$(DEPOT_TOOLS);%PATH% && gclient.bat sync --no-hooks"
+TINT_GCLIENT = cmd.exe /c "set DEPOT_TOOLS_UPDATE=0&& set PATH=$(DEPOT_TOOLS);%PATH% && gclient.bat sync --nohooks"
 else
-TINT_GCLIENT = PATH="$(DEPOT_TOOLS):$$PATH" gclient sync --no-hooks
+TINT_GCLIENT = DEPOT_TOOLS_UPDATE=0 PATH="$(DEPOT_TOOLS):$$PATH" gclient sync --nohooks
 endif
 
 BUILD ?= build
