@@ -34,6 +34,10 @@ CMAKE_GENERATOR ?= Ninja
 NYBLER_CC ?= clang
 NYBLER_CXX ?= clang++
 NYBLER_JOBS ?= 2
+# Mesa's generated api_trace.c makes clang 22 exhaust the Windows paging file
+# even at -O0. MinGW GCC handles that file, so use it for the local Mesa build.
+MESA_CC ?= $(if $(filter Windows_NT,$(OS)),gcc,$(NYBLER_CC))
+MESA_CXX ?= $(if $(filter Windows_NT,$(OS)),g++,$(NYBLER_CXX))
 NYBLER_TMP := $(CURDIR)/$(BUILD)/tmp
 ifeq ($(OS),Windows_NT)
 POWERSHELL ?= C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
@@ -47,8 +51,9 @@ NYBLER_TARGET_FLAGS ?= --target=$(NYBLER_TARGET) -L$(NYBLER_MINGW_LIB) -fuse-ld=
 NYBLER_PATH_ENV = PATH="$(NYBLER_MINGW_BIN):$(PREFIX)/bin:$$PATH"
 GLSLANG_CC ?= gcc
 GLSLANG_CXX ?= g++
-MESON_ENV = CC="$(NYBLER_CC)" CXX="$(NYBLER_CXX)" \
-	CFLAGS="$(NYBLER_TARGET_FLAGS)" CXXFLAGS="$(NYBLER_TARGET_FLAGS)" \
+MESA_TARGET_FLAGS ?= $(if $(filter Windows_NT,$(OS)),-L$(NYBLER_MINGW_LIB) -fuse-ld=bfd,)
+MESON_ENV = CC="$(MESA_CC)" CXX="$(MESA_CXX)" \
+	CFLAGS="$(MESA_TARGET_FLAGS)" CXXFLAGS="$(MESA_TARGET_FLAGS)" \
 	$(NYBLER_PATH_ENV)
 else
 NYBLER_TARGET_FLAGS ?=
@@ -84,6 +89,8 @@ GLSLANG_STAMP := $(STAMP_DIR)/glslang.stamp
 WINFLEXBISON_STAMP := $(STAMP_DIR)/winflexbison.stamp
 MESA_STAMP := $(STAMP_DIR)/mesa.stamp
 NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
+NYBLER_SOURCES := $(wildcard $(CURDIR)/src/*.c $(CURDIR)/src/*.cpp \
+	$(CURDIR)/src/*.h $(CURDIR)/include/nybler/*.h $(CURDIR)/CMakeLists.txt)
 
 WINFLEXBISON_VERSION ?= 2.5.25
 WINFLEXBISON_URL ?= https://github.com/lexxmark/winflexbison/releases/download/v$(WINFLEXBISON_VERSION)/win_flex_bison-$(WINFLEXBISON_VERSION).zip
@@ -233,7 +240,7 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
-$(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP)
+$(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP) $(NYBLER_SOURCES)
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -S $(CURDIR) -B $(NYBLER_BUILD) -G $(CMAKE_GENERATOR) \
 		-DCMAKE_C_COMPILER=$(NYBLER_CC) \
@@ -255,7 +262,7 @@ dom-smoke: nybler lexbor
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(DOM_SMOKE_BIN) $(DOM_SMOKE_OBJ) \
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
-	$(DOM_SMOKE_BIN)
+	$(NYBLER_PATH_ENV) $(DOM_SMOKE_BIN)
 
 layout-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
@@ -265,7 +272,7 @@ layout-smoke: nybler lexbor
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(LAYOUT_SMOKE_BIN) $(LAYOUT_SMOKE_OBJ) \
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
-	$(LAYOUT_SMOKE_BIN)
+	$(NYBLER_PATH_ENV) $(LAYOUT_SMOKE_BIN)
 
 shader-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
@@ -275,7 +282,7 @@ shader-smoke: nybler lexbor
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(SHADER_SMOKE_BIN) $(SHADER_SMOKE_OBJ) \
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
-	$(SHADER_SMOKE_BIN)
+	$(NYBLER_PATH_ENV) $(SHADER_SMOKE_BIN)
 
 resources-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
@@ -285,7 +292,7 @@ resources-smoke: nybler lexbor
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(RESOURCES_SMOKE_BIN) $(RESOURCES_SMOKE_OBJ) \
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
-	$(RESOURCES_SMOKE_BIN)
+	$(NYBLER_PATH_ENV) $(RESOURCES_SMOKE_BIN)
 
 check: nybler dom-smoke layout-smoke shader-smoke resources-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"

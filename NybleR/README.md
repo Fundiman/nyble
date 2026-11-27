@@ -73,11 +73,11 @@ with, for example, `make -C NybleR tint NYBLER_JOBS=1`.
 
 The default Windows Mesa configuration uses `softpipe` with Vulkan disabled
 until a local `llvm-config` is available; llvmpipe and lavapipe remain the
-intended performance paths. It uses Meson's `plain` build type because the
-`release` preset overwrites `-Doptimization` with `-O3`, and Mesa's generated
-`api_trace.c` makes clang exhaust memory at that level. `MESA_BUILDTYPE` and
-`MESA_ARGS` can be overridden to enable LLVM drivers or a different
-optimization level when the local toolchain has enough memory.
+intended performance paths. Mesa is compiled with MinGW GCC on Windows because
+clang 22 exhausts the paging file while parsing Mesa's generated `api_trace.c`,
+even at `-O0`. NybleR and Tint still use clang. `MESA_CC`, `MESA_CXX`,
+`MESA_TARGET_FLAGS`, `MESA_BUILDTYPE`, and `MESA_ARGS` can be overridden to
+enable LLVM drivers or a different toolchain when available.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.
