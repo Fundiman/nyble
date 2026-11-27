@@ -27,7 +27,14 @@ built locally from source submodules:
 | --- | --- | --- |
 | `third_party/lexbor` | Lexbor | HTML5, DOM, CSS, selectors, URL, encoding |
 | `third_party/tint` | Tint | Full WGSL parsing/validation and SPIR-V/GLSL/MSL output |
+| `third_party/tint/.../glslang` | glslang | Local `glslangValidator` required by Mesa's GLSL build |
 | `third_party/mesa` | Mesa | OpenGL/EGL and Vulkan software/hardware rendering |
+
+On Windows, Meson also needs Flex and Bison. NybleR downloads pinned
+`winflexbison` tools into `NybleR/build/local/bin`, including the `data/` M4
+macros next to `win_bison.exe`; no system MSYS2 installation is used.
+`tools/meson_clock.py` wraps Meson locally so Windows file timestamps that are a
+fraction of a second in the future do not abort configuration.
 
 The Tint checkout is the pinned, read-only Tint mirror. That upstream repository
 states that Tint development now happens in Dawn, so this source is treated as a
@@ -46,10 +53,13 @@ Targets:
 
 - `lexbor` — build and install local Lexbor into `NybleR/build/local`
 - `tint` — fetch Tint's pinned build dependencies with `gclient`, then build Tint
-- `mesa` — build local Mesa with software GL/Vulkan drivers
-- `deps` — all three local dependency builds
+- `glslang` — build Tint's vendored glslang and install `glslangValidator`
+- `mesa` — build local Mesa with EGL, GLES2, and software GL drivers
+- `deps` — all four local dependency builds
 - `nybler` — build the NybleR static library and C/C++ headers
-- `dom-smoke` — locally built Lexbor smoke test: `<h1> hello world </h1>` → `hello world`
+- `dom-smoke` — public `nybler_*` DOM API smoke test: `<h1> hello world </h1>` → `hello world`
+- `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
+- `check` — run both smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -58,6 +68,11 @@ test infrastructure, CTS, DXC, libc++, protobuf, googletest, benchmark, and
 Vulkan validation layers. CIPD dependencies are ignored because CMake uses the
 local Ninja/CMake installation. `NYBLER_JOBS` defaults to `2`; raise or lower it
 with, for example, `make -C NybleR tint NYBLER_JOBS=1`.
+
+The default Windows Mesa configuration uses `softpipe` with Vulkan disabled
+until a local `llvm-config` is available; llvmpipe and lavapipe remain the
+intended performance paths. `MESA_ARGS` can be overridden to enable them when
+LLVM development tools are present.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.

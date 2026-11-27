@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.20)
 project(nybler VERSION 0.1.0 LANGUAGES C CXX)
 
 set(NYBLER_SOURCES
+  src/document.c
+  src/layout.c
   src/instance.c
   src/version.c
 )
@@ -15,6 +17,11 @@ target_include_directories(nybler
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+
+if(LEXBOR_ROOT)
+  target_include_directories(nybler PRIVATE "${LEXBOR_ROOT}/include")
+  target_compile_definitions(nybler PRIVATE LEXBOR_STATIC)
+endif()
 
 target_compile_features(nybler PUBLIC c_std_11 cxx_std_17)
 set_target_properties(nybler PROPERTIES

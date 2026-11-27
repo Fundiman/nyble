@@ -24,6 +24,7 @@ Nyble
 └── NybleR                        native renderer (C/C++)
     ├── Lexbor                    HTML/DOM/CSSOM (local source submodule)
     ├── Tint                      WGSL compiler (local source submodule)
+    │   ├── glslang               local glslangValidator build for Mesa
     │   └── SPIR-V                portable shader IR
     └── Mesa                      OpenGL/EGL + Vulkan backend (local source submodule)
         ├── llvmpipe              software OpenGL fallback
@@ -44,6 +45,7 @@ Nyble build
 ├── CMake + Ninja                 NybleR local dependency builds (Lexbor, Tint)
 ├── Meson                         NybleR local Mesa build
 ├── depot_tools + gclient         pinned Tint dependency sync
+├── winflexbison                  pinned Windows Flex/Bison for Mesa
 ├── LLVM tooling                  Mesa llvmpipe/lavapipe shader compilation
 ├── clang / clang++               native POSIX and mingw-w64 Windows compiler
 ├── Zig 0.16.0                    optional mingw-w64 driver (USE_ZIG=1)
