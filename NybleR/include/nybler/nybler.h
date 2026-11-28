@@ -180,6 +180,7 @@ typedef struct NyblerQueue NyblerQueue;
 typedef struct NyblerLayout NyblerLayout;
 typedef struct NyblerDisplayList NyblerDisplayList;
 typedef struct NyblerPainter NyblerPainter;
+typedef struct NyblerTextRenderer NyblerTextRenderer;
 
 typedef struct NyblerRect {
   float x;
@@ -240,6 +241,7 @@ typedef struct NyblerTextureDescriptor {
   uint32_t mip_level_count;
   uint32_t sample_count;
   uint32_t usage;
+  const void *initial_data;
   const char *label;
 } NyblerTextureDescriptor;
 
@@ -582,6 +584,23 @@ NYBLER_API NyblerResult nybler_painter_record(
   const NyblerRenderPassDescriptor *render_pass
 );
 NYBLER_API void nybler_painter_release(NyblerPainter *painter);
+
+/* Real glyph rendering backed by Trex (FreeType + HarfBuzz). A text renderer
+ * owns a glyph atlas texture, sampler, bind group, and textured pipeline.
+ * Attach one to a painter with nybler_painter_set_text_renderer(); after that,
+ * TEXT display items are drawn as glyph quads instead of colored placeholders.
+ * The painter borrows the renderer; keep it alive while commands are in use. */
+NYBLER_API NyblerResult nybler_text_renderer_create(
+  NyblerDevice *device,
+  const char *font_path,
+  float font_size,
+  NyblerTextRenderer **out_renderer
+);
+NYBLER_API void nybler_text_renderer_release(NyblerTextRenderer *renderer);
+NYBLER_API void nybler_painter_set_text_renderer(
+  NyblerPainter *painter,
+  NyblerTextRenderer *renderer
+);
 
 #ifdef __cplusplus
 }

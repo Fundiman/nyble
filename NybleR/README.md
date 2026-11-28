@@ -11,6 +11,8 @@ Lexbor DOM/CSSOM
     ↓
 NybleR style + layout + display list
     ↓
+NybleR painter + Trex glyph atlas (FreeType + HarfBuzz)
+    ↓
 NybleR WebGPU-style native API
     ↓
 Tint: full WGSL → SPIR-V / GLSL / MSL / HLSL
@@ -29,6 +31,10 @@ built locally from source submodules:
 | `third_party/tint` | Tint | Full WGSL parsing/validation and SPIR-V/GLSL/MSL output |
 | `third_party/tint/.../glslang` | glslang | Local `glslangValidator` required by Mesa's GLSL build |
 | `third_party/mesa` | Mesa | OpenGL/EGL and Vulkan software/hardware rendering |
+| `third_party/trex` | Trex | Glyph atlas and HarfBuzz text shaping |
+| `third_party/freetype` | FreeType | Font rasterization for Trex |
+| `third_party/harfbuzz` | HarfBuzz | Text shaping for Trex |
+| `third_party/stb` | stb | Trex image utilities |
 
 On Windows, Meson also needs Flex and Bison. NybleR downloads pinned
 `winflexbison` tools into `NybleR/build/local/bin`, including the `data/` M4
@@ -55,7 +61,8 @@ Targets:
 - `tint` — fetch Tint's pinned build dependencies with `gclient`, then build Tint
 - `glslang` — build Tint's vendored glslang and install `glslangValidator`
 - `mesa` — build local Mesa with EGL, GLES2, and software GL drivers
-- `deps` — all four local dependency builds
+- `trex` — build and install Trex, FreeType, and HarfBuzz from local vendored sources
+- `deps` — all five local dependency builds
 - `nybler` — build the NybleR static library and C/C++ headers
 - `dom-smoke` — public `nybler_*` DOM API smoke test: `<h1> hello world </h1>` → `hello world`
 - `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
@@ -63,7 +70,8 @@ Targets:
 - `resources-smoke` — buffers, textures, samplers, bind groups, pipelines, render passes, command buffers, and queue submission smoke test
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
 - `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
-- `check` — run all six smoke tests
+- `text-smoke` — DOM → layout → display list → Trex glyph atlas → GPU readback smoke test
+- `check` — run all seven smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -103,12 +111,25 @@ capability behavior.
 
 `nybler_painter_create()` and `nybler_painter_record()` bridge layout to GPU
 commands. A painter owns full-WGSL shaders, a render pipeline, and vertex
-buffers; recording walks a display list and turns visible `BOX` and `TEXT` rects
-into clip-space quads with per-vertex colors. Transparent items are skipped.
-The painter begins and ends the render pass, so callers finish and submit the
+buffers; recording walks a display list and turns visible `BOX` rects into
+clip-space quads with per-vertex colors. Transparent items are skipped. The
+painter begins and ends the render pass, so callers finish and submit the
 encoder themselves. Release the painter only after submitted commands are no
-longer in use. Text is currently a colored quad placeholder; glyph rasterization
-is a later step.
+longer in use.
+
+`nybler_text_renderer_create()` builds a real glyph pipeline from a font file
+using Trex (FreeType rasterization and HarfBuzz shaping). It owns an RGBA glyph
+atlas texture, a nearest-filter sampler, a bind group, full-WGSL text shaders,
+and a textured render pipeline. Attach it to a painter with
+`nybler_painter_set_text_renderer()`; the painter borrows the renderer, which
+must stay alive while commands are in use. After attachment, visible `TEXT`
+display items are shaped into glyph quads with UVs and drawn in the same render
+pass as colored boxes. `NyblerTextureDescriptor.initial_data` supplies the
+atlas upload. The Mesa backend binds the atlas through a functional bind group
+and samples coverage in the textured GLSL variant; both the colored and textured
+shader modules are still fully validated as WGSL and compiled to SPIR-V by Tint.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
-build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.
+build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required. NybleR uses
+clang with C++20 for its own sources and Trex bridge; Mesa on Windows uses MinGW
+GCC as described above.

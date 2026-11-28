@@ -72,6 +72,7 @@ typedef ptrdiff_t NyblerGLsizeiptr;
 #define NYBLER_GL_FRAGMENT_SHADER 0x8B30
 #define NYBLER_GL_COMPILE_STATUS 0x8B81
 #define NYBLER_GL_LINK_STATUS 0x8B82
+#define NYBLER_GL_TEXTURE0 0x84C0
 
 typedef NyblerEGLBoolean(NYBLER_APIENTRY *NyblerEGLInitializeFn)(
   NyblerEGLDisplay display,
@@ -278,6 +279,15 @@ typedef void(NYBLER_APIENTRY *NyblerGLGetProgramInfoLogFn)(
 typedef void(NYBLER_APIENTRY *NyblerGLUseProgramFn)(NyblerGLuint program);
 typedef void(NYBLER_APIENTRY *NyblerGLDeleteProgramFn)(NyblerGLuint program);
 typedef void(NYBLER_APIENTRY *NyblerGLFinishFn)(void);
+typedef void(NYBLER_APIENTRY *NyblerGLActiveTextureFn)(NyblerGLenum texture);
+typedef NyblerGLint(NYBLER_APIENTRY *NyblerGLGetUniformLocationFn)(
+  NyblerGLuint program,
+  const char *name
+);
+typedef void(NYBLER_APIENTRY *NyblerGLUniform1iFn)(
+  NyblerGLint location,
+  NyblerGLint value
+);
 
 struct NyblerMesaContext {
   void *egl_library;
@@ -335,6 +345,9 @@ struct NyblerMesaContext {
   NyblerGLUseProgramFn gl_use_program;
   NyblerGLDeleteProgramFn gl_delete_program;
   NyblerGLFinishFn gl_finish;
+  NyblerGLActiveTextureFn gl_active_texture;
+  NyblerGLGetUniformLocationFn gl_get_uniform_location;
+  NyblerGLUniform1iFn gl_uniform_1i;
 };
 
 typedef struct NyblerMesaTexture {
@@ -430,6 +443,9 @@ static void *nybler_load_symbol(void *library, const char *name) {
 #define NyblerGLglUseProgramFn NyblerGLUseProgramFn
 #define NyblerGLglDeleteProgramFn NyblerGLDeleteProgramFn
 #define NyblerGLglFinishFn NyblerGLFinishFn
+#define NyblerGLglActiveTextureFn NyblerGLActiveTextureFn
+#define NyblerGLglGetUniformLocationFn NyblerGLGetUniformLocationFn
+#define NyblerGLglUniform1iFn NyblerGLUniform1iFn
 
 #define NYBLER_LOAD_EGL(context, field, name) \
   do { \
@@ -544,6 +560,9 @@ NyblerResult nybler_mesa_init(NyblerMesaContext **out_context) {
   NYBLER_LOAD_GLES(context, gl_use_program, glUseProgram);
   NYBLER_LOAD_GLES(context, gl_delete_program, glDeleteProgram);
   NYBLER_LOAD_GLES(context, gl_finish, glFinish);
+  NYBLER_LOAD_GLES(context, gl_active_texture, glActiveTexture);
+  NYBLER_LOAD_GLES(context, gl_get_uniform_location, glGetUniformLocation);
+  NYBLER_LOAD_GLES(context, gl_uniform_1i, glUniform1i);
 
   get_platform_display = (NyblerEGLGetPlatformDisplayFn)
     nybler_load_symbol(
@@ -685,7 +704,7 @@ NyblerResult nybler_mesa_create_texture(
     0,
     NYBLER_GL_RGBA,
     NYBLER_GL_UNSIGNED_BYTE,
-    NULL);
+    texture->descriptor.initial_data);
 
   context->gl_gen_framebuffers(1, &framebuffer);
   if (!framebuffer) {
@@ -791,7 +810,34 @@ NyblerResult nybler_mesa_create_pipeline(
     "void main() {\n"
     "  out_color = fragment_color;\n"
     "}\n";
-  int use_vertex_color = pipeline && pipeline->vertex_attribute_count >= 2;
+  static const char *textured_vertex_source =
+    "#version 300 es\n"
+    "layout(location = 0) in vec2 position;\n"
+    "layout(location = 1) in vec2 uv;\n"
+    "layout(location = 2) in vec4 color;\n"
+    "out vec2 fragment_uv;\n"
+    "out vec4 fragment_color;\n"
+    "void main() {\n"
+    "  gl_Position = vec4(position, 0.0, 1.0);\n"
+    "  fragment_uv = uv;\n"
+    "  fragment_color = color;\n"
+    "}\n";
+  static const char *textured_fragment_source =
+    "#version 300 es\n"
+    "precision mediump float;\n"
+    "in vec2 fragment_uv;\n"
+    "in vec4 fragment_color;\n"
+    "uniform sampler2D glyph_atlas;\n"
+    "out vec4 out_color;\n"
+    "void main() {\n"
+    "  float coverage = texture(glyph_atlas, fragment_uv).a;\n"
+    "  out_color = vec4(fragment_color.rgb, fragment_color.a * coverage);\n"
+    "}\n";
+  int use_vertex_color = pipeline && pipeline->vertex_attribute_count >= 2 &&
+    pipeline->vertex_attribute_count < 3;
+  int use_textured = pipeline && pipeline->vertex_attribute_count >= 3;
+  const char *chosen_vertex;
+  const char *chosen_fragment;
   NyblerMesaPipeline *state;
   NyblerGLuint vertex_shader = 0;
   NyblerGLuint fragment_shader = 0;
@@ -808,14 +854,14 @@ NyblerResult nybler_mesa_create_pipeline(
     return NYBLER_ERROR_BACKEND_UNAVAILABLE;
   }
 
+  chosen_vertex = use_textured ? textured_vertex_source :
+    (use_vertex_color ? colored_vertex_source : vertex_source);
+  chosen_fragment = use_textured ? textured_fragment_source :
+    (use_vertex_color ? colored_fragment_source : fragment_source);
   vertex_shader = nybler_compile_shader(
-    context,
-    NYBLER_GL_VERTEX_SHADER,
-    use_vertex_color ? colored_vertex_source : vertex_source);
+    context, NYBLER_GL_VERTEX_SHADER, chosen_vertex);
   fragment_shader = nybler_compile_shader(
-    context,
-    NYBLER_GL_FRAGMENT_SHADER,
-    use_vertex_color ? colored_fragment_source : fragment_source);
+    context, NYBLER_GL_FRAGMENT_SHADER, chosen_fragment);
   if (!vertex_shader || !fragment_shader) goto fail;
 
   state = (NyblerMesaPipeline *)calloc(1, sizeof(*state));
@@ -950,6 +996,7 @@ NyblerResult nybler_mesa_execute(
   NyblerCommandBuffer *const *command_buffers
 ) {
   NyblerRenderPipeline *pipeline = NULL;
+  NyblerBindGroup *bind_group = NULL;
   NyblerBuffer *vertex_buffer = NULL;
   uint64_t vertex_offset = 0;
   NyblerGLenum primitive = 0;
@@ -1002,10 +1049,15 @@ NyblerResult nybler_mesa_execute(
           context->gl_clear(NYBLER_GL_COLOR_BUFFER_BIT);
         }
         pipeline = NULL;
+        bind_group = NULL;
         vertex_buffer = NULL;
         vertex_offset = 0;
         break;
       }
+
+      case NYBLER_COMMAND_SET_BIND_GROUP:
+        bind_group = command->data.set_bind_group.group;
+        break;
 
       case NYBLER_COMMAND_SET_PIPELINE:
         pipeline = command->data.set_pipeline.pipeline;
@@ -1059,6 +1111,35 @@ NyblerResult nybler_mesa_execute(
         }
 
         context->gl_use_program(state->program);
+        if (pipeline->vertex_attribute_count >= 3) {
+          NyblerMesaTexture *atlas = NULL;
+          size_t binding_index;
+
+          if (!bind_group) {
+            result = NYBLER_ERROR_UNSUPPORTED;
+            goto done;
+          }
+          for (binding_index = 0;
+               binding_index < bind_group->entry_count;
+               ++binding_index) {
+            const NyblerBindGroupEntryStorage *entry =
+              &bind_group->entries[binding_index];
+            if (entry->binding_type == NYBLER_BINDING_TYPE_TEXTURE &&
+                entry->texture) {
+              atlas = (NyblerMesaTexture *)entry->texture->backend;
+              break;
+            }
+          }
+          if (!atlas || !context->gl_active_texture ||
+              !context->gl_get_uniform_location || !context->gl_uniform_1i) {
+            result = NYBLER_ERROR_UNSUPPORTED;
+            goto done;
+          }
+          context->gl_active_texture(NYBLER_GL_TEXTURE0);
+          context->gl_bind_texture(NYBLER_GL_TEXTURE_2D, atlas->texture);
+          context->gl_uniform_1i(
+            context->gl_get_uniform_location(state->program, "glyph_atlas"), 0);
+        }
         context->gl_gen_buffers(1, &vbo);
         context->gl_bind_buffer(NYBLER_GL_ARRAY_BUFFER, vbo);
         context->gl_buffer_data(
@@ -1105,6 +1186,7 @@ NyblerResult nybler_mesa_execute(
       case NYBLER_COMMAND_END_RENDER_PASS:
         context->gl_bind_framebuffer(NYBLER_GL_FRAMEBUFFER, 0);
         pipeline = NULL;
+        bind_group = NULL;
         vertex_buffer = NULL;
         vertex_offset = 0;
         break;

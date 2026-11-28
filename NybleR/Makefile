@@ -68,12 +68,17 @@ LEXBOR_SRC := $(ROOT)/third_party/lexbor
 TINT_SRC := $(ROOT)/third_party/tint
 MESA_SRC := $(ROOT)/third_party/mesa
 GLSLANG_SRC := $(TINT_SRC)/third_party/vulkan-deps/glslang/src
+TREX_SRC := $(ROOT)/third_party/trex
+FREETYPE_SRC := $(ROOT)/third_party/freetype
+HARFBUZZ_SRC := $(ROOT)/third_party/harfbuzz
+STB_SRC := $(ROOT)/third_party/stb
 
 LEXBOR_BUILD := $(CURDIR)/$(BUILD)/lexbor
 TINT_BUILD := $(CURDIR)/$(BUILD)/tint
 TINT_ABSL_BUILD := $(TINT_BUILD)/third_party/abseil
 MESA_BUILD := $(CURDIR)/$(BUILD)/mesa
 GLSLANG_BUILD := $(CURDIR)/$(BUILD)/glslang
+TREX_BUILD := $(CURDIR)/$(BUILD)/trex
 ifeq ($(OS),Windows_NT)
 GLSLANG_VALIDATOR := $(GLSLANG_BUILD)/StandAlone/glslangValidator.exe
 else
@@ -88,6 +93,7 @@ TINT_STAMP := $(STAMP_DIR)/tint.stamp
 GLSLANG_STAMP := $(STAMP_DIR)/glslang.stamp
 WINFLEXBISON_STAMP := $(STAMP_DIR)/winflexbison.stamp
 MESA_STAMP := $(STAMP_DIR)/mesa.stamp
+TREX_STAMP := $(STAMP_DIR)/trex.stamp
 NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 NYBLER_SOURCES := $(wildcard $(CURDIR)/src/*.c $(CURDIR)/src/*.cpp \
 	$(CURDIR)/src/*.h $(CURDIR)/include/nybler/*.h $(CURDIR)/CMakeLists.txt)
@@ -107,6 +113,7 @@ SHADER_SMOKE_BIN := $(CURDIR)/$(BUILD)/shader-smoke$(if $(filter Windows_NT,$(OS
 RESOURCES_SMOKE_BIN := $(CURDIR)/$(BUILD)/resources-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 MESA_SMOKE_BIN := $(CURDIR)/$(BUILD)/mesa-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 PAINT_SMOKE_BIN := $(CURDIR)/$(BUILD)/paint-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+TEXT_SMOKE_BIN := $(CURDIR)/$(BUILD)/text-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
@@ -114,6 +121,7 @@ SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.obj
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.obj
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.obj
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.obj
+TEXT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/text-smoke.obj
 LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
 NYBLER_LIB ?= $(NYBLER_BUILD)/nybler.lib
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/tint*.lib)
@@ -122,6 +130,7 @@ NYBLER_ABSL_LIBS = $(wildcard $(PREFIX)/lib/absl*.lib)
 # flags such as -static-libstdc++ and --start-group are ignored there.
 NYBLER_CXX_LINK_FLAGS ?=
 NYBLER_LINK_TINT = $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) $(NYBLER_ABSL_LIBS)
+NYBLER_LINK_TREX = $(PREFIX)/lib/trex.lib $(PREFIX)/lib/freetype.lib $(PREFIX)/lib/harfbuzz.lib
 else
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.o
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.o
@@ -129,24 +138,27 @@ SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.o
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.o
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.o
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.o
+TEXT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/text-smoke.o
 LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
 NYBLER_LIB ?= $(NYBLER_BUILD)/libnybler.a
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/libtint*.a)
 NYBLER_ABSL_LIBS = $(wildcard $(PREFIX)/lib/libabsl*.a)
 NYBLER_CXX_LINK_FLAGS ?=
 NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl,--end-group
+NYBLER_LINK_TREX = -Wl,--start-group $(PREFIX)/lib/libtrex.a $(PREFIX)/lib/libfreetype.a $(PREFIX)/lib/libharfbuzz.a -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa trex nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke text-smoke check clean
 
 all: deps nybler
 
-deps: lexbor tint glslang mesa
+deps: lexbor tint glslang mesa trex
 
 lexbor: $(LEXBOR_STAMP)
 tint: $(TINT_STAMP)
 glslang: $(GLSLANG_STAMP)
 mesa: $(MESA_STAMP)
+trex: $(TREX_STAMP)
 nybler: $(NYBLER_STAMP)
 
 $(LEXBOR_STAMP):
@@ -246,7 +258,25 @@ $(MESA_STAMP): $(GLSLANG_STAMP) $(if $(filter Windows_NT,$(OS)),$(WINFLEXBISON_S
 	$(MESON_ENV) TMPDIR=$(NYBLER_TMP) TMP=$(NYBLER_TMP) TEMP=$(NYBLER_TMP) $(NYBLER_MESON) install -C $(MESA_BUILD)
 	$(CMAKE) -E touch $@
 
-$(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP) $(NYBLER_SOURCES)
+$(TREX_STAMP):
+	$(CMAKE) -E make_directory $(STAMP_DIR)
+	$(CMAKE) -S $(CURDIR)/config/trex-build -B $(TREX_BUILD) -G $(CMAKE_GENERATOR) \
+		-DCMAKE_C_COMPILER=$(NYBLER_CC) \
+		-DCMAKE_CXX_COMPILER=$(NYBLER_CXX) \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
+		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+		-DTREX_SOURCE_DIR=$(TREX_SRC) \
+		-DFETCHCONTENT_SOURCE_DIR_FREETYPE=$(FREETYPE_SRC) \
+		-DFETCHCONTENT_SOURCE_DIR_HARFBUZZ=$(HARFBUZZ_SRC) \
+		-DFETCHCONTENT_SOURCE_DIR_STB=$(STB_SRC) \
+		-DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+		-DHB_BUILD_SUBSET=OFF \
+		-DHB_HAVE_FREETYPE=ON
+	$(CMAKE) --build $(TREX_BUILD) --target trex freetype harfbuzz --parallel $(NYBLER_JOBS)
+	$(CMAKE) --install $(TREX_BUILD)
+	$(CMAKE) -E touch $@
+
+$(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP) $(TREX_STAMP) $(NYBLER_SOURCES)
 	$(CMAKE) -E make_directory $(STAMP_DIR)
 	$(CMAKE) -S $(CURDIR) -B $(NYBLER_BUILD) -G $(CMAKE_GENERATOR) \
 		-DCMAKE_C_COMPILER=$(NYBLER_CC) \
@@ -255,6 +285,7 @@ $(NYBLER_STAMP): $(LEXBOR_STAMP) $(TINT_STAMP) $(NYBLER_SOURCES)
 		-DCMAKE_PREFIX_PATH=$(PREFIX) \
 		-DLEXBOR_ROOT=$(PREFIX) \
 		-DTINT_ROOT=$(PREFIX) \
+		-DTREX_ROOT=$(PREFIX) \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX)
 	$(CMAKE) --build $(NYBLER_BUILD) --config $(BUILD_TYPE) --parallel $(NYBLER_JOBS)
 	$(CMAKE) --install $(NYBLER_BUILD) --config $(BUILD_TYPE)
@@ -267,7 +298,7 @@ dom-smoke: nybler lexbor
 		-c -o $(DOM_SMOKE_OBJ) $(CURDIR)/tests/dom_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(DOM_SMOKE_BIN) $(DOM_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(DOM_SMOKE_BIN)
 
 layout-smoke: nybler lexbor
@@ -277,7 +308,7 @@ layout-smoke: nybler lexbor
 		-c -o $(LAYOUT_SMOKE_OBJ) $(CURDIR)/tests/layout_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(LAYOUT_SMOKE_BIN) $(LAYOUT_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(LAYOUT_SMOKE_BIN)
 
 shader-smoke: nybler lexbor
@@ -287,7 +318,7 @@ shader-smoke: nybler lexbor
 		-c -o $(SHADER_SMOKE_OBJ) $(CURDIR)/tests/shader_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(SHADER_SMOKE_BIN) $(SHADER_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(SHADER_SMOKE_BIN)
 
 resources-smoke: nybler lexbor
@@ -297,7 +328,7 @@ resources-smoke: nybler lexbor
 		-c -o $(RESOURCES_SMOKE_OBJ) $(CURDIR)/tests/resources_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(RESOURCES_SMOKE_BIN) $(RESOURCES_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(RESOURCES_SMOKE_BIN)
 
 mesa-smoke: nybler lexbor
@@ -307,7 +338,7 @@ mesa-smoke: nybler lexbor
 		-c -o $(MESA_SMOKE_OBJ) $(CURDIR)/tests/mesa_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(MESA_SMOKE_BIN) $(MESA_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(MESA_SMOKE_BIN)
 
 paint-smoke: nybler lexbor
@@ -317,10 +348,20 @@ paint-smoke: nybler lexbor
 		-c -o $(PAINT_SMOKE_OBJ) $(CURDIR)/tests/paint_smoke.c
 	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
 		-o $(PAINT_SMOKE_BIN) $(PAINT_SMOKE_OBJ) \
-		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(PAINT_SMOKE_BIN)
 
-check: nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke
+text-smoke: nybler lexbor trex
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 -DLEXBOR_STATIC \
+		-I$(CURDIR)/include -I$(PREFIX)/include \
+		-c -o $(TEXT_SMOKE_OBJ) $(CURDIR)/tests/text_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(TEXT_SMOKE_BIN) $(TEXT_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
+	$(NYBLER_PATH_ENV) $(TEXT_SMOKE_BIN) "$(TREX_SRC)/examples/fonts/Roboto-Regular.ttf"
+
+check: nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke text-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:

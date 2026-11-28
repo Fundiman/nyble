@@ -83,6 +83,22 @@ struct NyblerBindGroup {
   char *label;
 };
 
+struct NyblerTextRenderer {
+  NyblerDevice *device;
+  void *atlas;
+  void *shaper;
+  NyblerTexture *atlas_texture;
+  NyblerSampler *sampler;
+  NyblerBindGroupLayout *bind_group_layout;
+  NyblerBindGroup *bind_group;
+  NyblerShaderModule *vertex_module;
+  NyblerShaderModule *fragment_module;
+  NyblerRenderPipeline *pipeline;
+  float font_size;
+  unsigned int atlas_width;
+  unsigned int atlas_height;
+};
+
 struct NyblerRenderPipeline {
   NyblerDevice *device;
   NyblerShaderModule *vertex_module;
@@ -167,6 +183,27 @@ struct NyblerCommandBuffer {
 char *nybler_internal_duplicate_string(const char *value);
 
 void nybler_internal_free_commands(NyblerCommand *commands, size_t count);
+
+/* Text bridge implemented in text.cpp. Fills `vertices` with 32-byte textured
+ * quads (position.xy, uv.xy, color.rgba) for a single display item. Returns 1
+ * on success, 0 if the capacity is insufficient. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+int nybler_text_shape(
+  NyblerTextRenderer *renderer,
+  const char *text,
+  size_t text_length,
+  const NyblerRect *rect,
+  const NyblerViewport *viewport,
+  const NyblerColor *color,
+  float *vertices,
+  size_t *vertex_count,
+  size_t capacity
+);
+#ifdef __cplusplus
+}
+#endif
 
 /* Computed style bridge. document.c owns Lexbor's CSSOM and exposes serialized
  * cascade winners to layout.c without leaking Lexbor types into the public API.

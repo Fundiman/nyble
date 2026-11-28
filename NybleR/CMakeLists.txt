@@ -10,6 +10,7 @@ set(NYBLER_SOURCES
   src/paint.c
   src/resources.c
   src/shader_bridge.cpp
+  src/text.cpp
   src/version.c
 )
 
@@ -53,16 +54,35 @@ if(TINT_ROOT)
   endif()
 endif()
 
+if(TREX_ROOT)
+  set(TREX_INCLUDE_DIR "${TREX_ROOT}/include/trex")
+  if(WIN32)
+    file(GLOB TREX_LIBRARIES "${TREX_ROOT}/lib/trex.lib"
+      "${TREX_ROOT}/lib/freetype.lib" "${TREX_ROOT}/lib/harfbuzz.lib")
+  else()
+    file(GLOB TREX_LIBRARIES "${TREX_ROOT}/lib/libtrex.a"
+      "${TREX_ROOT}/lib/libfreetype.a" "${TREX_ROOT}/lib/libharfbuzz.a")
+  endif()
+  if(NOT EXISTS "${TREX_INCLUDE_DIR}/Trex/Atlas.hpp")
+    message(FATAL_ERROR "Trex headers are missing from ${TREX_INCLUDE_DIR}")
+  endif()
+  if(NOT TREX_LIBRARIES)
+    message(FATAL_ERROR "Trex libraries are missing from ${TREX_ROOT}/lib")
+  endif()
+  target_include_directories(nybler PRIVATE "${TREX_INCLUDE_DIR}")
+  target_link_libraries(nybler PUBLIC ${TREX_LIBRARIES})
+endif()
+
 if(UNIX)
   target_link_libraries(nybler PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
-target_compile_features(nybler PUBLIC c_std_11 cxx_std_17)
+target_compile_features(nybler PUBLIC c_std_11 cxx_std_20)
 set_target_properties(nybler PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF
-  CXX_STANDARD 17
+  CXX_STANDARD 20
   CXX_STANDARD_REQUIRED ON
   CXX_EXTENSIONS OFF
 )

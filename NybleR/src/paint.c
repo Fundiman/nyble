@@ -13,6 +13,7 @@ struct NyblerPainter {
   NyblerShaderModule *vertex_module;
   NyblerShaderModule *fragment_module;
   NyblerRenderPipeline *pipeline;
+  NyblerTextRenderer *text_renderer;
   NyblerPainterBuffer *buffers;
 };
 
@@ -164,6 +165,13 @@ fail:
   return result;
 }
 
+void nybler_painter_set_text_renderer(
+  NyblerPainter *painter,
+  NyblerTextRenderer *renderer
+) {
+  if (painter) painter->text_renderer = renderer;
+}
+
 void nybler_painter_release(NyblerPainter *painter) {
   NyblerPainterBuffer *entry;
   NyblerPainterBuffer *next;
@@ -190,12 +198,16 @@ NyblerResult nybler_painter_record(
   const NyblerRenderPassDescriptor *render_pass
 ) {
   NyblerRenderPassEncoder *pass = NULL;
-  NyblerBuffer *vertices = NULL;
+  NyblerBuffer *color_vertices = NULL;
+  NyblerBuffer *text_vertices = NULL;
   const NyblerRenderPassColorAttachment *attachment;
-  float *quads = NULL;
-  size_t item_count = 0;
-  size_t vertex_count = 0;
-  size_t index = 0;
+  float *color_quads = NULL;
+  float *text_quads = NULL;
+  size_t color_count = 0;
+  size_t text_count = 0;
+  size_t text_glyph_capacity = 0;
+  size_t color_index = 0;
+  size_t text_index = 0;
   size_t i;
   NyblerResult result;
   NyblerBufferDescriptor descriptor;
@@ -210,50 +222,118 @@ NyblerResult nybler_painter_record(
     return NYBLER_ERROR_INVALID_ARGUMENT;
   }
   attachment = &render_pass->color_attachments[0];
+  (void)attachment;
 
   for (i = 0; i < nybler_display_list_length(display_list); ++i) {
-    if (nybler_painter_item_visible(nybler_display_list_item(display_list, i))) {
-      item_count++;
+    const NyblerDisplayItem *item = nybler_display_list_item(display_list, i);
+    if (!nybler_painter_item_visible(item)) continue;
+    if (painter->text_renderer && item->kind == NYBLER_DISPLAY_ITEM_TEXT) {
+      text_count++;
+      text_glyph_capacity += item->text_length;
+    } else {
+      color_count++;
     }
   }
-  if (item_count > (SIZE_MAX / 6) / sizeof(float)) {
+  if (color_count > (SIZE_MAX / 6) / sizeof(float) ||
+      text_glyph_capacity > SIZE_MAX / (6 * 8 * sizeof(float))) {
     return NYBLER_ERROR_OUT_OF_MEMORY;
   }
-  vertex_count = item_count * 6;
-  if (vertex_count) {
-    quads = (float *)calloc(vertex_count * 6, sizeof(*quads));
-    if (!quads) return NYBLER_ERROR_OUT_OF_MEMORY;
-    for (i = 0; i < nybler_display_list_length(display_list); ++i) {
-      const NyblerDisplayItem *item =
-        nybler_display_list_item(display_list, i);
-      if (nybler_painter_item_visible(item)) {
-        nybler_painter_write_quad(
-          quads, &index, viewport, &item->rect, &item->color);
-      }
-    }
 
-    memset(&descriptor, 0, sizeof(descriptor));
-    descriptor.size = (uint64_t)vertex_count * 6 * sizeof(float);
-    descriptor.usage = NYBLER_BUFFER_USAGE_VERTEX;
-    descriptor.initial_data = quads;
-    descriptor.label = "nybler painter vertices";
-    result = nybler_device_create_buffer(painter->device, &descriptor, &vertices);
-    free(quads);
-    if (result != NYBLER_OK) return result;
-    if (!nybler_painter_append_buffer(painter, vertices)) {
-      nybler_buffer_release(vertices);
+  if (color_count) {
+    color_quads = (float *)calloc(
+      color_count * 6 * 6, sizeof(*color_quads));
+    if (!color_quads) return NYBLER_ERROR_OUT_OF_MEMORY;
+  }
+  if (text_glyph_capacity) {
+    text_quads = (float *)calloc(
+      text_glyph_capacity * 6 * 8, sizeof(*text_quads));
+    if (!text_quads) {
+      free(color_quads);
       return NYBLER_ERROR_OUT_OF_MEMORY;
     }
   }
 
+  for (i = 0; i < nybler_display_list_length(display_list); ++i) {
+    const NyblerDisplayItem *item = nybler_display_list_item(display_list, i);
+    if (!nybler_painter_item_visible(item)) continue;
+    if (painter->text_renderer && item->kind == NYBLER_DISPLAY_ITEM_TEXT) {
+      size_t produced = 0;
+      if (!nybler_text_shape(
+            painter->text_renderer,
+            item->text, item->text_length,
+            &item->rect, viewport, &item->color,
+            text_quads + text_index * 8, &produced,
+            (text_glyph_capacity * 6) - text_index)) {
+        free(color_quads);
+        free(text_quads);
+        return NYBLER_ERROR_UNSUPPORTED;
+      }
+      text_index += produced;
+    } else {
+      nybler_painter_write_quad(
+        color_quads, &color_index, viewport, &item->rect, &item->color);
+    }
+  }
+
+  if (color_count) {
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.size = (uint64_t)color_count * 6 * 6 * sizeof(float);
+    descriptor.usage = NYBLER_BUFFER_USAGE_VERTEX;
+    descriptor.initial_data = color_quads;
+    descriptor.label = "nybler painter color vertices";
+    result = nybler_device_create_buffer(
+      painter->device, &descriptor, &color_vertices);
+    if (result != NYBLER_OK) goto fail_buffers;
+    if (!nybler_painter_append_buffer(painter, color_vertices)) {
+      nybler_buffer_release(color_vertices);
+      color_vertices = NULL;
+      result = NYBLER_ERROR_OUT_OF_MEMORY;
+      goto fail_buffers;
+    }
+  }
+  if (text_count && text_index) {
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.size = (uint64_t)text_index * 8 * sizeof(float);
+    descriptor.usage = NYBLER_BUFFER_USAGE_VERTEX;
+    descriptor.initial_data = text_quads;
+    descriptor.label = "nybler painter text vertices";
+    result = nybler_device_create_buffer(
+      painter->device, &descriptor, &text_vertices);
+    if (result != NYBLER_OK) goto fail_buffers;
+    if (!nybler_painter_append_buffer(painter, text_vertices)) {
+      nybler_buffer_release(text_vertices);
+      text_vertices = NULL;
+      result = NYBLER_ERROR_OUT_OF_MEMORY;
+      goto fail_buffers;
+    }
+  }
+
+  free(color_quads);
+  free(text_quads);
+  color_quads = NULL;
+  text_quads = NULL;
+
   result = nybler_command_encoder_begin_render_pass(
     encoder, render_pass, &pass);
   if (result != NYBLER_OK) return result;
-  if (vertices) {
+  if (color_vertices) {
     nybler_render_pass_set_pipeline(pass, painter->pipeline);
-    nybler_render_pass_set_vertex_buffer(pass, 0, vertices, 0);
-    nybler_render_pass_draw(pass, (uint32_t)vertex_count, 1, 0, 0);
+    nybler_render_pass_set_vertex_buffer(pass, 0, color_vertices, 0);
+    nybler_render_pass_draw(pass, (uint32_t)color_count * 6, 1, 0, 0);
+  }
+  if (text_vertices && painter->text_renderer) {
+    nybler_render_pass_set_pipeline(
+      pass, painter->text_renderer->pipeline);
+    nybler_render_pass_set_bind_group(
+      pass, 0, painter->text_renderer->bind_group);
+    nybler_render_pass_set_vertex_buffer(pass, 0, text_vertices, 0);
+    nybler_render_pass_draw(pass, (uint32_t)text_index, 1, 0, 0);
   }
   nybler_render_pass_end(pass);
   return NYBLER_OK;
+
+fail_buffers:
+  free(color_quads);
+  free(text_quads);
+  return result;
 }
