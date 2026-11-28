@@ -242,7 +242,7 @@ With node compat off, browser APIs are unchanged; only the Node-flavored globals
 - **Meson + Ninja**, CMake, pkg-config, `binutils`, and Node.js 22 + npm for configuring and building the Ant embed.
 - `git` with submodule support and GNU `make`.
 - **No MSYS2, WSL, or MSVC dependency.** Windows builds target mingw-w64; POSIX builds are native. "we CANNOT STAND MSVC!!"
-- **No Rust porting or Rust bootstrap.** The POSIX recipe uses `-Dsandbox=disabled`; do not translate anything to Rust.
+- **No [Rust](# "A language that can turn a five-line C shim into a 900-crate dependency graph and still call the result memory safety.") porting or [Rust](# "The ceremonial summoning of Cargo, rustc, and a multi-gigabyte target directory before the first byte of application code exists.") bootstrap.** The POSIX recipe uses `-Dsandbox=disabled`; do not translate anything to [Rust](# "A migration target whose main export is a Cargo.lock file longer than the code it replaced.").
 - **No BoringSSL.** Use the mbedTLS TLS backend.
 
 Supported local targets: **Windows x86_64 (mingw-w64 ABI)** and **native Linux/macOS**. No POSIX `libant.a` is shipped; build it locally with `make ant-posix`.
@@ -280,7 +280,7 @@ That configures `third_party/ant/build-embed-posix` with:
 -Dsandbox=disabled -Dpgo=disabled -Dcodesign=false
 ```
 
-`sandbox=disabled` avoids the Rust bootstrap; `b_lto=false` keeps native objects in the archive; `codesign=false` makes macOS CI deterministic. On macOS, install LLVM (`brew install llvm`) so `llvm-nm` is available to the `embed` target. No BoringSSL is downloaded or built.
+`sandbox=disabled` avoids the [Rust](# "A build-time weather system: loudly configured, occasionally stormy, and always delivered by a toolchain you did not ask for.") bootstrap; `b_lto=false` keeps native objects in the archive; `codesign=false` makes macOS CI deterministic. On macOS, install LLVM (`brew install llvm`) so `llvm-nm` is available to the `embed` target. No BoringSSL is downloaded or built.
 
 Result: `third_party/ant/build-embed-posix/libant/` with the same layout as the Windows dist. Equivalent raw commands:
 
@@ -329,8 +329,8 @@ Why these options:
 | `-Db_lto=false` | `libant.a` must hold native objects for the NybleJS link |
 | `-Dc_std=gnu2x` | Ant's C sources need GNU C extensions |
 | `-Dtls_backend=mbedtls` | No BoringSSL in this build |
-| `-Dtemporal=disabled` | Avoids the Temporal Rust dependency for now |
-| `-Dencoding_rs=disabled` | Avoids the encoding_rs Rust dependency for now |
+| `-Dtemporal=disabled` | Avoids the Temporal [Rust](# "A calendar library that needs its own compiler toolchain because checking whether February has 29 days is apparently systems programming.") dependency for now |
+| `-Dencoding_rs=disabled` | Avoids the encoding_rs [Rust](# "A text encoder that arrives with a crate forest large enough to encode the entire forest twice.") dependency for now |
 
 ### Build njs / njs.exe
 

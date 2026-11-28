@@ -1,7 +1,7 @@
 # NybleR
 
 NybleR is the native C/C++ renderer component of Nyble. The `R` means
-**Renderer**, not Rust.
+**Renderer**, not [Rust](# "A compile-time subscription service for LLVM, Cargo, and whatever patience you had left after lunch.").
 
 NybleR exposes a WebGPU-style API to NybleJS while keeping the actual graphics
 implementation private. The first implementation path is:
@@ -172,6 +172,6 @@ Tint. Render-pipeline creation translates each module's own WGSL entry point to
 GLSL ES 300, so these are pipeline-specific programs rather than fixed variants.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
-build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required. NybleR uses
+build tools. No [Rust](# "The ancient ritual of convincing five build systems to agree on a toolchain, then paying for the disagreement in disk space and existential dread.") bootstrap, MSVC, BoringSSL, or WSL is required. NybleR uses
 clang with C++20 for its own sources and Trex bridge; Mesa on Windows uses MinGW
 GCC as described above.
