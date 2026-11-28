@@ -1,0 +1,64 @@
+name: nybler-macos
+
+# macOS toolchain gate for the real NybleR Metal backend. This runs before the
+# backend is implemented so an Apple runner is proven to have the Objective-C++
+# toolchain and Metal frameworks needed by src/metal_backend.mm.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/nybler-macos.yml"
+      - "NybleR/src/**"
+      - "NybleR/include/**"
+      - "NybleR/tests/**"
+  pull_request:
+    paths:
+      - ".github/workflows/nybler-macos.yml"
+      - "NybleR/src/**"
+      - "NybleR/include/**"
+      - "NybleR/tests/**"
+
+jobs:
+  metal-toolchain:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Probe Metal toolchain and device
+        run: |
+          set -eu
+          cat > nybler_metal_probe.mm <<'EOF'
+          #import <Cocoa/Cocoa.h>
+          #import <Metal/Metal.h>
+          #import <QuartzCore/CAMetalLayer.h>
+
+          #include <cstdio>
+
+          int main() {
+            id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+            if (!device) {
+              std::fputs("nybler metal probe: no default device\n", stderr);
+              return 1;
+            }
+            CAMetalLayer *layer = [CAMetalLayer layer];
+            if (!layer) {
+              std::fputs("nybler metal probe: no CAMetalLayer\n", stderr);
+              return 1;
+            }
+            layer.device = device;
+            layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            std::printf("nybler metal probe: %s\n", [[device name] UTF8String]);
+            return 0;
+          }
+          EOF
+          clang++ -std=c++17 -x objective-c++ \
+            nybler_metal_probe.mm \
+            -o nybler_metal_probe \
+            -framework Cocoa -framework Metal -framework QuartzCore
+          ./nybler_metal_probe
