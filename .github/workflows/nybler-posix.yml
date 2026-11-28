@@ -1,0 +1,321 @@
+name: nybler-posix
+
+# Native POSIX source-level checks for the NybleR C API. No MSYS2, no WSL, no
+# MSVC, no winflexbison, and no user-supplied font/icon are needed.
+#
+# Full `make -C NybleR check` is intentionally NOT run here: it needs Tint's
+# depot_tools/gclient sync plus local glslang + Mesa EGL/GLES software-driver
+# builds and the Trex/FreeType/HarfBuzz stack. Those are heavy renderer builds,
+# not portable source checks. This job builds the POSIX-portable Lexbor target,
+# compiles the real DOM/layout/instance/resource/paint C sources, and supplies
+# small stubs only for the Tint/Mesa/Trex bridges so the public C smoke tests
+# can be compiled and the deterministic non-GPU ones executed.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/nybler-posix.yml"
+      - "NybleR/Makefile"
+      - "NybleR/CMakeLists.txt"
+      - "NybleR/src/**"
+      - "NybleR/include/**"
+      - "NybleR/tests/**"
+      - "NybleR/tools/**"
+      - "NybleR/cmake/**"
+      - "third_party/lexbor"
+  pull_request:
+    paths:
+      - ".github/workflows/nybler-posix.yml"
+      - "NybleR/Makefile"
+      - "NybleR/CMakeLists.txt"
+      - "NybleR/src/**"
+      - "NybleR/include/**"
+      - "NybleR/tests/**"
+      - "NybleR/tools/**"
+      - "NybleR/cmake/**"
+      - "third_party/lexbor"
+
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build make
+
+      - name: Build POSIX Lexbor
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          make -C NybleR lexbor NYBLER_CC=clang NYBLER_CXX=clang++ NYBLER_JOBS=2
+
+      - name: Compile and run portable NybleR smoke tests
+        working-directory: NybleR
+        env:
+          CC: clang
+        run: |
+          set -eu
+
+          mkdir -p build/posix-ci
+
+          # Only the renderer bridges are stubbed. The public API, DOM/CSSOM,
+          # layout, instance lifecycle, resource validation, and paint C code
+          # below are the real NybleR sources.
+          cat > build/posix-ci/posix_stubs.c <<'EOF'
+          #include "internal.h"
+          #include "mesa_backend.h"
+          #include "shader_bridge.h"
+
+          #include <stdlib.h>
+          #include <string.h>
+
+          NyblerResult nybler_mesa_init(NyblerMesaContext **out_context) {
+            if (!out_context) return NYBLER_ERROR_INVALID_ARGUMENT;
+            /* No Mesa GL on this fast path; AUTO falls back to NULL. */
+            *out_context = NULL;
+            return NYBLER_ERROR_BACKEND_UNAVAILABLE;
+          }
+
+          void nybler_mesa_destroy(NyblerMesaContext *context) {
+            (void)context;
+          }
+
+          NyblerResult nybler_mesa_create_texture(
+            NyblerMesaContext *context,
+            NyblerTexture *texture
+          ) {
+            (void)context;
+            (void)texture;
+            return NYBLER_OK;
+          }
+
+          void nybler_mesa_destroy_texture(NyblerTexture *texture) {
+            (void)texture;
+          }
+
+          NyblerResult nybler_mesa_create_pipeline(
+            NyblerMesaContext *context,
+            NyblerRenderPipeline *pipeline
+          ) {
+            (void)context;
+            (void)pipeline;
+            return NYBLER_OK;
+          }
+
+          void nybler_mesa_destroy_pipeline(NyblerRenderPipeline *pipeline) {
+            (void)pipeline;
+          }
+
+          NyblerResult nybler_mesa_execute(
+            NyblerMesaContext *context,
+            size_t command_count,
+            NyblerCommandBuffer *const *command_buffers
+          ) {
+            (void)context;
+            (void)command_count;
+            (void)command_buffers;
+            return NYBLER_OK;
+          }
+
+          static unsigned char *posix_stub_copy(const void *data, size_t size) {
+            unsigned char *copy = (unsigned char *)malloc(size ? size : 1);
+            if (!copy) return NULL;
+            if (size) memcpy(copy, data, size);
+            return copy;
+          }
+
+          /* Minimal Tint stand-in: enough shape for the shader/resource smoke
+           * tests. It does not validate WGSL; the real Tint build is skipped. */
+          NyblerResult nybler_tint_compile(
+            NyblerShaderFormat source_format,
+            const void *source,
+            size_t source_size,
+            NyblerShaderFormat target_format,
+            uint8_t **out_code,
+            size_t *out_code_size,
+            char **out_error
+          ) {
+            static const unsigned char spirv[16] = {
+              0x03, 0x02, 0x23, 0x07, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0, 0
+            };
+            static const char glsl[] = "#version 300 es\n";
+            static const char invalid_wgsl[] = "fn main() {";
+
+            if (!source || !out_code || !out_code_size) {
+              return NYBLER_ERROR_INVALID_ARGUMENT;
+            }
+            *out_code = NULL;
+            *out_code_size = 0;
+            if (out_error) *out_error = NULL;
+
+            if (source_format == NYBLER_SHADER_FORMAT_WGSL &&
+                source_size == sizeof(invalid_wgsl) - 1 &&
+                memcmp(source, invalid_wgsl, sizeof(invalid_wgsl) - 1) == 0) {
+              if (out_error) {
+                static const char message[] = "stub: invalid WGSL";
+                char *copy = (char *)malloc(sizeof(message));
+                if (!copy) return NYBLER_ERROR_OUT_OF_MEMORY;
+                memcpy(copy, message, sizeof(message));
+                *out_error = copy;
+              }
+              return NYBLER_ERROR_UNSUPPORTED;
+            }
+
+            if (source_format == target_format) {
+              *out_code = posix_stub_copy(source, source_size);
+              if (!*out_code) return NYBLER_ERROR_OUT_OF_MEMORY;
+              *out_code_size = source_size;
+              return NYBLER_OK;
+            }
+            if (target_format == NYBLER_SHADER_FORMAT_SPIRV) {
+              *out_code = posix_stub_copy(spirv, sizeof(spirv));
+              if (!*out_code) return NYBLER_ERROR_OUT_OF_MEMORY;
+              *out_code_size = sizeof(spirv);
+              return NYBLER_OK;
+            }
+            if (target_format == NYBLER_SHADER_FORMAT_GLSL) {
+              *out_code = posix_stub_copy(glsl, sizeof(glsl));
+              if (!*out_code) return NYBLER_ERROR_OUT_OF_MEMORY;
+              *out_code_size = sizeof(glsl);
+              return NYBLER_OK;
+            }
+            return NYBLER_ERROR_UNSUPPORTED;
+          }
+
+          NyblerResult nybler_tint_translate_glsl(
+            const void *source,
+            size_t source_size,
+            const char *entry_point,
+            NyblerGlslStage stage,
+            const NyblerGlslBinding *bindings,
+            size_t binding_count,
+            uint8_t **out_code,
+            size_t *out_code_size,
+            char **out_error
+          ) {
+            static const char glsl[] = "#version 300 es\n";
+            (void)source;
+            (void)source_size;
+            (void)entry_point;
+            (void)stage;
+            (void)bindings;
+            (void)binding_count;
+            (void)out_error;
+            if (!out_code || !out_code_size) return NYBLER_ERROR_INVALID_ARGUMENT;
+            *out_code = posix_stub_copy(glsl, sizeof(glsl));
+            if (!*out_code) return NYBLER_ERROR_OUT_OF_MEMORY;
+            *out_code_size = sizeof(glsl);
+            return NYBLER_OK;
+          }
+
+          NyblerResult nybler_text_renderer_create(
+            NyblerDevice *device,
+            const char *font_path,
+            float font_size,
+            NyblerTextRenderer **out_renderer
+          ) {
+            static char renderer;
+            (void)device;
+            (void)font_path;
+            (void)font_size;
+            if (!out_renderer) return NYBLER_ERROR_INVALID_ARGUMENT;
+            *out_renderer = (NyblerTextRenderer *)&renderer;
+            return NYBLER_OK;
+          }
+
+          void nybler_text_renderer_release(NyblerTextRenderer *renderer) {
+            (void)renderer;
+          }
+
+          int nybler_text_shape(
+            NyblerTextRenderer *renderer,
+            const char *text,
+            size_t text_length,
+            const NyblerRect *rect,
+            const NyblerViewport *viewport,
+            const NyblerColor *color,
+            float *vertices,
+            size_t *vertex_count,
+            size_t capacity
+          ) {
+            (void)renderer;
+            (void)text;
+            (void)text_length;
+            (void)rect;
+            (void)viewport;
+            (void)color;
+            (void)vertices;
+            (void)capacity;
+            if (vertex_count) *vertex_count = 0;
+            return 1;
+          }
+          EOF
+
+          cat > build/posix-ci/version_smoke.c <<'EOF'
+          #include "nybler/nybler.h"
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <string.h>
+
+          int main(void) {
+            const char *version = nybler_version_string();
+            if (!version || strcmp(version, "0.1.0") != 0) return 1;
+            if (nybler_version_number() != 0x00010000u) return 2;
+            puts("nybler version smoke: 0.1.0");
+            return 0;
+          }
+          EOF
+
+          PREFIX="$PWD/build/local"
+          CC="${CC:-clang}"
+          CFLAGS="-std=c11 -DLEXBOR_STATIC -Iinclude -Isrc -I$PREFIX/include"
+          LEXBOR_LIB="$PREFIX/lib/liblexbor_static.a"
+
+          SOURCES="
+            src/version.c
+            src/document.c
+            src/layout.c
+            src/instance.c
+            src/resources.c
+            src/paint.c
+            build/posix-ci/posix_stubs.c
+          "
+
+          OBJECTS=""
+          for source in $SOURCES; do
+            object="build/posix-ci/$(basename "$source" .c).o"
+            $CC $CFLAGS -c -o "$object" "$source"
+            OBJECTS="$OBJECTS $object"
+          done
+
+          for test in version dom layout shader resources mesa paint text; do
+            test_source="tests/${test}_smoke.c"
+            if [ "$test" = "version" ]; then
+              test_source="build/posix-ci/version_smoke.c"
+            fi
+            $CC $CFLAGS -c -o "build/posix-ci/${test}_smoke.o" \
+              "$test_source"
+            $CC -o "build/posix-ci/${test}_smoke" \
+              "build/posix-ci/${test}_smoke.o" $OBJECTS \
+              "$LEXBOR_LIB" -lm -ldl -lpthread
+          done
+
+          # Compile/link-only: resources/mesa/paint/text assert backend, pixel,
+          # or Trex glyph behavior that the stubs above intentionally do not
+          # reproduce. No font path or icon is supplied.
+          for test in version dom layout shader; do
+            echo "== nybler ${test} smoke =="
+            "./build/posix-ci/${test}_smoke"
+          done
