@@ -37,20 +37,26 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - shader modules
 - bind group layouts and bind groups
 - render/compute pipelines with explicit vertex attributes
-- display-list painters
-- Trex-backed text renderers (glyph atlas, sampler, bind group, text pipeline)
+- NybleR NyCanvas over NyPicture display lists
+- Trex-backed NyFont (glyph atlas, sampler, bind group, text pipeline)
 - command encoders and pass encoders
 - texture-to-buffer copy views and buffer readback
 - queue submission and presentation
 
-`nybler.hpp` stays a thin, header-only layer over that C ABI. Owned wrappers
-(`Buffer`, `Texture`, `CommandEncoder`, `CommandBuffer`, `Painter`, and
-`TextRenderer`) delete copy, support move, and release through the matching
-`nybler_*_release()` function. `RenderPassEncoder` and `Queue` are borrowed
-handles; the former ends an open pass on destruction. The copy/readback helpers
-build `NyblerImageCopyTexture`/`NyblerImageCopyBuffer` views from wrapper
-handles, and `Queue::submit()` transfers `CommandBuffer` ownership to the C API
-because `nybler_queue_submit()` consumes command buffers.
+`nybler.hpp` stays a thin, header-only layer over that C ABI. GPU objects keep
+WebGPU names (`Buffer`, `Texture`, `CommandEncoder`, `CommandBuffer`); painting
+uses NybleR's Ny-prefixed names (`NyCanvas`, `NyPicture`, `NyFont`, `NyPaint`)
+rather than verbatim Skia names, plus `NyColor`, `NyRect`, `NyViewport`,
+`NyExtent3D`, `NyOrigin3D`, and `NyPictureItem` value aliases. Owned wrappers
+delete copy, support move, and release through the matching `nybler_*_release()`
+function.
+`RenderPassEncoder` and `Queue` are borrowed handles; the former ends an open
+pass on destruction. The copy/readback helpers build
+`NyblerImageCopyTexture`/`NyblerImageCopyBuffer` views from wrapper handles,
+and `Queue::submit()` transfers `CommandBuffer` ownership to the C API because
+`nybler_queue_submit()` consumes command buffers. `NyCanvas::draw_picture()`
+forwards a `NyPicture` to `nybler_painter_record()`, and `NyCanvas::set_font()`
+attaches a Trex-backed `NyFont`; no C API names or behavior changed.
 
 Lexbor stays private behind `src/document.c`; callers never see Lexbor types or
 headers in `nybler.h`. Document parsing initializes Lexbor's CSSOM before HTML

@@ -12,6 +12,22 @@
 
 namespace nybler {
 
+/* NybleR value names for the plain C ABI structs. They take the Skia-shaped
+ * role but use Ny prefixes rather than copying Skia's names. The C ABI is
+ * unchanged; these are just the vocabulary used by the C++ wrapper. */
+using NyColor = NyblerColor;
+using NyRect = NyblerRect;
+using NyViewport = NyblerViewport;
+using NyExtent3D = NyblerExtent3D;
+using NyOrigin3D = NyblerOrigin3D;
+using NyPictureItem = NyblerDisplayItem;
+
+/* A minimal paint description. It carries the color slot without adding a new
+ * rendering path: callers pass it where a NyblerColor is expected. */
+struct NyPaint {
+  NyColor color;
+};
+
 enum class Backend : std::uint32_t {
   Auto = NYBLER_BACKEND_AUTO,
   MesaVulkan = NYBLER_BACKEND_MESA_VULKAN,
@@ -177,7 +193,8 @@ inline NyblerResult init(
   return result;
 }
 
-/* Resource wrappers borrow their device. Release them before the device. */
+/* GPU resources keep WebGPU names. They borrow their device; release them
+ * before the device. */
 class Buffer : public detail::OwnedHandle<NyblerBuffer, nybler_buffer_release> {
  public:
   using OwnedHandle::OwnedHandle;
@@ -352,31 +369,49 @@ class Queue : public detail::BorrowedHandle<NyblerQueue> {
   }
 };
 
-class TextRenderer
-  : public detail::OwnedHandle<NyblerTextRenderer, nybler_text_renderer_release> {
+/* NybleR painting objects. They still call the same nybler_painter_* and
+ * nybler_text_renderer_* C entry points; only the C++ names change. */
+class NyFont : public detail::OwnedHandle<NyblerTextRenderer, nybler_text_renderer_release> {
  public:
   using OwnedHandle::OwnedHandle;
 };
 
-class Painter : public detail::OwnedHandle<NyblerPainter, nybler_painter_release> {
+/* A display list is the retained drawing record. It borrows the layout that
+ * produced it, so release the picture before that layout. */
+class NyPicture : public detail::OwnedHandle<NyblerDisplayList, nybler_display_list_release> {
  public:
   using OwnedHandle::OwnedHandle;
 
-  NyblerResult record(
+  [[nodiscard]] std::size_t length() const noexcept {
+    return nybler_display_list_length(handle_);
+  }
+
+  [[nodiscard]] const NyPictureItem *item(std::size_t index) const noexcept {
+    return nybler_display_list_item(handle_, index);
+  }
+};
+
+class NyCanvas : public detail::OwnedHandle<NyblerPainter, nybler_painter_release> {
+ public:
+  using OwnedHandle::OwnedHandle;
+
+  /* nybler_painter_record() begins and ends its own render pass, so callers
+   * finish and submit the encoder afterwards. */
+  NyblerResult draw_picture(
+    const NyPicture &picture,
     CommandEncoder &encoder,
-    const NyblerViewport &viewport,
-    const NyblerDisplayList *display_list,
+    const NyViewport &viewport,
     const NyblerRenderPassDescriptor &render_pass
   ) {
     return nybler_painter_record(
-      handle_, encoder.native_handle(), &viewport, display_list, &render_pass);
+      handle_, encoder.native_handle(), &viewport, picture.native_handle(), &render_pass);
   }
 
-  void set_text_renderer(TextRenderer &renderer) {
-    nybler_painter_set_text_renderer(handle_, renderer.native_handle());
+  void set_font(NyFont &font) {
+    nybler_painter_set_text_renderer(handle_, font.native_handle());
   }
 
-  void clear_text_renderer() {
+  void clear_font() {
     nybler_painter_set_text_renderer(handle_, nullptr);
   }
 };
@@ -420,25 +455,33 @@ inline Queue device_queue(NyblerDevice *device) {
   return Queue(nybler_device_get_queue(device));
 }
 
-inline NyblerResult create_text_renderer(
-  NyblerDevice *device,
-  const char *font_path,
-  float font_size,
-  TextRenderer *out_renderer
-) {
-  if (!out_renderer) return NYBLER_ERROR_INVALID_ARGUMENT;
-  NyblerTextRenderer *raw = nullptr;
-  const NyblerResult result =
-    nybler_text_renderer_create(device, font_path, font_size, &raw);
-  if (result == NYBLER_OK) *out_renderer = TextRenderer(raw);
+inline NyblerResult create_picture(NyblerLayout *layout, NyPicture *out_picture) {
+  if (!out_picture) return NYBLER_ERROR_INVALID_ARGUMENT;
+  NyblerDisplayList *raw = nullptr;
+  const NyblerResult result = nybler_layout_display_list(layout, &raw);
+  if (result == NYBLER_OK) *out_picture = NyPicture(raw);
   return result;
 }
 
-inline NyblerResult create_painter(NyblerDevice *device, Painter *out_painter) {
-  if (!out_painter) return NYBLER_ERROR_INVALID_ARGUMENT;
+inline NyblerResult create_font(
+  NyblerDevice *device,
+  const char *font_path,
+  float font_size,
+  NyFont *out_font
+) {
+  if (!out_font) return NYBLER_ERROR_INVALID_ARGUMENT;
+  NyblerTextRenderer *raw = nullptr;
+  const NyblerResult result =
+    nybler_text_renderer_create(device, font_path, font_size, &raw);
+  if (result == NYBLER_OK) *out_font = NyFont(raw);
+  return result;
+}
+
+inline NyblerResult create_canvas(NyblerDevice *device, NyCanvas *out_canvas) {
+  if (!out_canvas) return NYBLER_ERROR_INVALID_ARGUMENT;
   NyblerPainter *raw = nullptr;
   const NyblerResult result = nybler_painter_create(device, &raw);
-  if (result == NYBLER_OK) *out_painter = Painter(raw);
+  if (result == NYBLER_OK) *out_canvas = NyCanvas(raw);
   return result;
 }
 

@@ -91,9 +91,10 @@ int main(int argc, char **argv) {
                "byte buffer read") && ok;
     ok = check(read_bytes == written_bytes, "byte buffer round trip") && ok;
 
+    const nybler::NyColor clear_color{1.0f, 0.0f, 0.0f, 1.0f};
     NyblerRenderPassColorAttachment attachment{};
     attachment.texture = texture.native_handle();
-    attachment.clear_value = {1.0f, 0.0f, 0.0f, 1.0f};
+    attachment.clear_value = clear_color;
     attachment.load_op = NYBLER_LOAD_OP_CLEAR;
     attachment.store_op = NYBLER_STORE_OP_STORE;
 
@@ -135,20 +136,23 @@ int main(int argc, char **argv) {
       "readback matches cleared texture"
     ) && ok;
 
+    nybler::NyPicture picture;
+    ok = check(!picture.valid(), "empty picture wrapper") && ok;
+
     if (argc > 1) {
-      nybler::TextRenderer text_renderer;
-      nybler::Painter painter;
+      nybler::NyFont font;
+      nybler::NyCanvas canvas;
       ok = check(
-        nybler::create_text_renderer(device, argv[1], 16.0f, &text_renderer) == NYBLER_OK,
-        "create text renderer wrapper"
+        nybler::create_font(device, argv[1], 16.0f, &font) == NYBLER_OK,
+        "create font wrapper"
       ) && ok;
       ok = check(
-        nybler::create_painter(device, &painter) == NYBLER_OK,
-        "create painter wrapper"
+        nybler::create_canvas(device, &canvas) == NYBLER_OK,
+        "create canvas wrapper"
       ) && ok;
-      if (text_renderer.valid() && painter.valid()) {
-        painter.set_text_renderer(text_renderer);
-        painter.clear_text_renderer();
+      if (font.valid() && canvas.valid()) {
+        canvas.set_font(font);
+        canvas.clear_font();
       }
     }
   }
@@ -157,7 +161,7 @@ int main(int argc, char **argv) {
   nybler_adapter_release(adapter);
 
   if (ok) {
-    std::puts("nybler cpp api smoke: buffer/text/painter wrappers, copy/readback ok");
+    std::puts("nybler cpp api smoke: buffer/NyCanvas/NyFont wrappers, copy/readback ok");
   }
   return ok ? 0 : 1;
 }

@@ -72,7 +72,7 @@ Targets:
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
 - `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
 - `text-smoke` — DOM → layout → display list → Trex glyph atlas → GPU readback smoke test
-- `cpp-api-smoke` — header-only C++ wrapper smoke: buffer write/read, render pass, texture copy, queue submit, readback, and painter/text renderer ownership
+- `cpp-api-smoke` — header-only C++ wrapper smoke: buffer write/read, render pass, texture copy, queue submit, readback, and NyCanvas/NyFont ownership
 - `check` — run all nine smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
@@ -125,14 +125,23 @@ without a 256-byte alignment requirement. `nybler_buffer_read()` then exposes
 the result. Backend-specific format or usage rejections are normal WebGPU
 capability behavior.
 
-The header-only `nybler.hpp` wraps these flows in RAII types: `Buffer`,
-`Texture`, `CommandEncoder`, `RenderPassEncoder`, `CommandBuffer`, `Queue`,
-`Painter`, and `TextRenderer`. Owned types expose `native_handle()`, `valid()`,
-`reset()`, and move semantics; render pass encoders and queues borrow their
-parent. `Buffer` adds typed and byte-vector write/read helpers, and
-`CommandEncoder::copy_texture_to_buffer()` builds the WebGPU copy views from
-wrapper handles. `Queue::submit()` detaches submitted command buffers because
-the C API consumes them, preventing double release.
+The header-only `nybler.hpp` uses WebGPU names for GPU objects (`Buffer`,
+`Texture`, `CommandEncoder`, `RenderPassEncoder`, `CommandBuffer`, `Queue`) and
+NybleR's own Ny-prefixed names for painting (`NyCanvas`, `NyPicture`, `NyFont`,
+`NyPaint`), with `NyColor`, `NyRect`, `NyViewport`, `NyExtent3D`, `NyOrigin3D`,
+and `NyPictureItem` value aliases. These are NybleR names, not verbatim Skia
+names. Owned types expose
+`native_handle()`, `valid()`, `reset()`, and move semantics; render pass
+encoders and queues borrow their parent. `Buffer` adds typed and byte-vector
+write/read helpers, and `CommandEncoder::copy_texture_to_buffer()` builds the
+WebGPU copy views from wrapper handles. `Queue::submit()` detaches submitted
+command buffers because the C API consumes them, preventing double release.
+
+`NyPicture` wraps the display list produced by layout, and
+`NyCanvas::draw_picture()` feeds it to the existing painter bridge.
+`NyCanvas::set_font()` attaches a Trex-backed `NyFont`; `clear_font()` detaches
+it. These are renames only — every call still goes through the stable
+`nybler_*` C ABI.
 
 `nybler_painter_create()` and `nybler_painter_record()` bridge layout to GPU
 commands. A painter owns full-WGSL shaders, a render pipeline, and vertex
