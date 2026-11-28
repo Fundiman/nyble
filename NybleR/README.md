@@ -62,7 +62,8 @@ Targets:
 - `shader-smoke` — instance/adapter/device lifecycle and full WGSL → SPIR-V/GLSL compile smoke test
 - `resources-smoke` — buffers, textures, samplers, bind groups, pipelines, render passes, command buffers, and queue submission smoke test
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
-- `check` — run all five smoke tests
+- `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
+- `check` — run all six smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -99,6 +100,15 @@ must be at least the packed row size; rows are packed into the destination
 without a 256-byte alignment requirement. `nybler_buffer_read()` then exposes
 the result. Backend-specific format or usage rejections are normal WebGPU
 capability behavior.
+
+`nybler_painter_create()` and `nybler_painter_record()` bridge layout to GPU
+commands. A painter owns full-WGSL shaders, a render pipeline, and vertex
+buffers; recording walks a display list and turns visible `BOX` and `TEXT` rects
+into clip-space quads with per-vertex colors. Transparent items are skipped.
+The painter begins and ends the render pass, so callers finish and submit the
+encoder themselves. Release the painter only after submitted commands are no
+longer in use. Text is currently a colored quad placeholder; glyph rasterization
+is a later step.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required.

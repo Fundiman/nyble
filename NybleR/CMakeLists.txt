@@ -7,6 +7,7 @@ set(NYBLER_SOURCES
   src/layout.c
   src/instance.c
   src/mesa_backend.c
+  src/paint.c
   src/resources.c
   src/shader_bridge.cpp
   src/version.c

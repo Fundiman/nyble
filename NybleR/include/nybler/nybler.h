@@ -125,6 +125,19 @@ typedef enum NyblerPrimitiveTopology {
   NYBLER_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP
 } NyblerPrimitiveTopology;
 
+typedef enum NyblerVertexFormat {
+  NYBLER_VERTEX_FORMAT_FLOAT32 = 0,
+  NYBLER_VERTEX_FORMAT_FLOAT32X2,
+  NYBLER_VERTEX_FORMAT_FLOAT32X3,
+  NYBLER_VERTEX_FORMAT_FLOAT32X4
+} NyblerVertexFormat;
+
+typedef struct NyblerVertexAttribute {
+  uint32_t shader_location;
+  uint32_t offset;
+  NyblerVertexFormat format;
+} NyblerVertexAttribute;
+
 typedef enum NyblerLoadOp {
   NYBLER_LOAD_OP_LOAD = 0,
   NYBLER_LOAD_OP_CLEAR,
@@ -166,6 +179,7 @@ typedef struct NyblerRenderPassEncoder NyblerRenderPassEncoder;
 typedef struct NyblerQueue NyblerQueue;
 typedef struct NyblerLayout NyblerLayout;
 typedef struct NyblerDisplayList NyblerDisplayList;
+typedef struct NyblerPainter NyblerPainter;
 
 typedef struct NyblerRect {
   float x;
@@ -285,6 +299,9 @@ typedef struct NyblerRenderPipelineDescriptor {
   size_t target_count;
   NyblerPrimitiveTopology topology;
   const NyblerBindGroupLayout *layout;
+  const NyblerVertexAttribute *vertex_attributes;
+  size_t vertex_attribute_count;
+  uint32_t vertex_stride;
   const char *label;
 } NyblerRenderPipelineDescriptor;
 
@@ -547,6 +564,24 @@ NYBLER_API NyblerResult nybler_queue_submit(
   size_t command_count,
   NyblerCommandBuffer *const *commands
 );
+
+/* Display-list paint bridge. A painter owns the shaders, pipeline, and vertex
+ * buffers needed to turn display-list boxes and text into colored quads.
+ * nybler_painter_record() begins and ends the render pass itself, so the caller
+ * can finish and submit the encoder. Release the painter only after the
+ * submitted command buffers are no longer in use. */
+NYBLER_API NyblerResult nybler_painter_create(
+  NyblerDevice *device,
+  NyblerPainter **out_painter
+);
+NYBLER_API NyblerResult nybler_painter_record(
+  NyblerPainter *painter,
+  NyblerCommandEncoder *encoder,
+  const NyblerViewport *viewport,
+  const NyblerDisplayList *display_list,
+  const NyblerRenderPassDescriptor *render_pass
+);
+NYBLER_API void nybler_painter_release(NyblerPainter *painter);
 
 #ifdef __cplusplus
 }

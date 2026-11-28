@@ -13,6 +13,8 @@ NybleR layout box tree
     ↓
 NybleR display list
     ↓
+NybleR painter: colored quads
+    ↓
 NybleR WebGPU-style native API
     ↓
 Tint: WGSL → SPIR-V / GLSL
@@ -34,7 +36,8 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - buffers, textures, samplers
 - shader modules
 - bind group layouts and bind groups
-- render/compute pipelines
+- render/compute pipelines with explicit vertex attributes
+- display-list painters
 - command encoders and pass encoders
 - texture-to-buffer copy views and buffer readback
 - queue submission and presentation
@@ -47,6 +50,14 @@ Lexbor. `src/document.c` exposes only serialized computed values to
 runs, and produces borrowed display-list items. Display lists own copies of
 their text so they can outlive a layout object; layouts borrow their source
 document.
+
+`src/paint.c` is the display-list paint bridge. `NyblerPainter` owns the
+full-WGSL shaders, pipeline, and vertex buffers used to draw `BOX` and `TEXT`
+items as clip-space quads with per-vertex colors. The bridge computes NDC from
+the layout viewport and item rectangles, skips transparent or empty items, then
+records a normal render pass through the public WebGPU-shaped API. Callers keep
+the painter alive until submitted command buffers are done; text currently uses
+colored quads until a glyph atlas is added.
 
 `src/resources.c` implements the WebGPU-style object graph. Devices borrow
 adapters, resources and queues borrow devices, render pass encoders borrow their
@@ -81,9 +92,12 @@ SPIR-V input → magic/alignment check → Vulkan/lavapipe
 Shader modules always store SPIR-V; failures carry Tint diagnostics through the
 optional `out_error` parameter. The local Mesa GL backend currently validates
 pipeline creation with fixed GLSL ES 300 programs instead of translating each
-pipeline's WGSL entry points. Full WGSL is still parsed, validated, and compiled
-to SPIR-V when the shader module is created; using fixed GLSL only limits the
-visual output of the software validation path, not the accepted WGSL language.
+pipeline's WGSL entry points. Two fixed variants exist: the legacy magenta
+program for pipelines without explicit vertex attributes, and a position/color
+program for pipelines with location 0 and location 1 attributes, which the paint
+bridge uses. Full WGSL is still parsed, validated, and compiled to SPIR-V when
+the shader module is created; using fixed GLSL only limits the visual output of
+the software validation path, not the accepted WGSL language.
 
 Backend capability checks are not a WGSL subset parser. A shader may compile as
 full WGSL and still be rejected by a specific backend when it uses features that

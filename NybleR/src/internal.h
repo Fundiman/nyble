@@ -93,6 +93,9 @@ struct NyblerRenderPipeline {
   size_t target_count;
   NyblerPrimitiveTopology topology;
   const NyblerBindGroupLayout *layout;
+  NyblerVertexAttribute *vertex_attributes;
+  size_t vertex_attribute_count;
+  uint32_t vertex_stride;
   char *label;
   void *backend;
 };

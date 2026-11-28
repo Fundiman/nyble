@@ -106,12 +106,14 @@ LAYOUT_SMOKE_BIN := $(CURDIR)/$(BUILD)/layout-smoke$(if $(filter Windows_NT,$(OS
 SHADER_SMOKE_BIN := $(CURDIR)/$(BUILD)/shader-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 RESOURCES_SMOKE_BIN := $(CURDIR)/$(BUILD)/resources-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 MESA_SMOKE_BIN := $(CURDIR)/$(BUILD)/mesa-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+PAINT_SMOKE_BIN := $(CURDIR)/$(BUILD)/paint-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.obj
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.obj
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.obj
+PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.obj
 LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
 NYBLER_LIB ?= $(NYBLER_BUILD)/nybler.lib
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/tint*.lib)
@@ -126,6 +128,7 @@ LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.o
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.o
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.o
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.o
+PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.o
 LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
 NYBLER_LIB ?= $(NYBLER_BUILD)/libnybler.a
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/libtint*.a)
@@ -134,7 +137,7 @@ NYBLER_CXX_LINK_FLAGS ?=
 NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke check clean
 
 all: deps nybler
 
@@ -307,7 +310,17 @@ mesa-smoke: nybler lexbor
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
 	$(NYBLER_PATH_ENV) $(MESA_SMOKE_BIN)
 
-check: nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke
+paint-smoke: nybler lexbor
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 -DLEXBOR_STATIC \
+		-I$(CURDIR)/include -I$(PREFIX)/include \
+		-c -o $(PAINT_SMOKE_OBJ) $(CURDIR)/tests/paint_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(PAINT_SMOKE_BIN) $(PAINT_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT)
+	$(NYBLER_PATH_ENV) $(PAINT_SMOKE_BIN)
+
+check: nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:

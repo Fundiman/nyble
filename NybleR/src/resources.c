@@ -38,6 +38,16 @@ static int nybler_buffer_fits(const NyblerBuffer *buffer, uint64_t offset, uint6
   return size <= buffer->size - offset;
 }
 
+static uint32_t nybler_vertex_format_size(NyblerVertexFormat format) {
+  switch (format) {
+    case NYBLER_VERTEX_FORMAT_FLOAT32: return 4;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X2: return 8;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X3: return 12;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X4: return 16;
+    default: return 0;
+  }
+}
+
 static uint32_t nybler_texture_bytes_per_pixel(NyblerTextureFormat format) {
   switch (format) {
     case NYBLER_TEXTURE_FORMAT_R8_UNORM: return 1;
@@ -421,6 +431,19 @@ NyblerResult nybler_device_create_render_pipeline(
       return NYBLER_ERROR_INVALID_ARGUMENT;
     }
   }
+  if (descriptor->vertex_attribute_count) {
+    if (!descriptor->vertex_attributes || descriptor->vertex_stride == 0) {
+      return NYBLER_ERROR_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < descriptor->vertex_attribute_count; ++i) {
+      const NyblerVertexAttribute *attribute = &descriptor->vertex_attributes[i];
+      uint32_t size = nybler_vertex_format_size(attribute->format);
+      if (!size || attribute->offset > descriptor->vertex_stride ||
+          size > descriptor->vertex_stride - attribute->offset) {
+        return NYBLER_ERROR_INVALID_ARGUMENT;
+      }
+    }
+  }
 
   pipeline = (NyblerRenderPipeline *)calloc(1, sizeof(*pipeline));
   if (!pipeline) return NYBLER_ERROR_OUT_OF_MEMORY;
@@ -432,6 +455,21 @@ NyblerResult nybler_device_create_render_pipeline(
   }
   memcpy(pipeline->targets, descriptor->targets,
          descriptor->target_count * sizeof(*pipeline->targets));
+  if (descriptor->vertex_attribute_count) {
+    pipeline->vertex_attributes = (NyblerVertexAttribute *)calloc(
+      descriptor->vertex_attribute_count,
+      sizeof(*pipeline->vertex_attributes));
+    if (!pipeline->vertex_attributes) {
+      nybler_render_pipeline_release(pipeline);
+      return NYBLER_ERROR_OUT_OF_MEMORY;
+    }
+    memcpy(
+      pipeline->vertex_attributes,
+      descriptor->vertex_attributes,
+      descriptor->vertex_attribute_count * sizeof(*pipeline->vertex_attributes));
+    pipeline->vertex_attribute_count = descriptor->vertex_attribute_count;
+    pipeline->vertex_stride = descriptor->vertex_stride;
+  }
 
   pipeline->vertex_entry_point =
     nybler_internal_duplicate_string(descriptor->vertex_entry_point);
@@ -469,6 +507,7 @@ void nybler_render_pipeline_release(NyblerRenderPipeline *pipeline) {
   free(pipeline->vertex_entry_point);
   free(pipeline->fragment_entry_point);
   free(pipeline->targets);
+  free(pipeline->vertex_attributes);
   free(pipeline);
 }
 

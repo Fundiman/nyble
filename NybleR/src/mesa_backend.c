@@ -774,6 +774,24 @@ NyblerResult nybler_mesa_create_pipeline(
     "void main() {\n"
     "  out_color = vec4(1.0, 0.0, 1.0, 1.0);\n"
     "}\n";
+  static const char *colored_vertex_source =
+    "#version 300 es\n"
+    "layout(location = 0) in vec2 position;\n"
+    "layout(location = 1) in vec4 color;\n"
+    "out vec4 fragment_color;\n"
+    "void main() {\n"
+    "  gl_Position = vec4(position, 0.0, 1.0);\n"
+    "  fragment_color = color;\n"
+    "}\n";
+  static const char *colored_fragment_source =
+    "#version 300 es\n"
+    "precision mediump float;\n"
+    "in vec4 fragment_color;\n"
+    "out vec4 out_color;\n"
+    "void main() {\n"
+    "  out_color = fragment_color;\n"
+    "}\n";
+  int use_vertex_color = pipeline && pipeline->vertex_attribute_count >= 2;
   NyblerMesaPipeline *state;
   NyblerGLuint vertex_shader = 0;
   NyblerGLuint fragment_shader = 0;
@@ -791,9 +809,13 @@ NyblerResult nybler_mesa_create_pipeline(
   }
 
   vertex_shader = nybler_compile_shader(
-    context, NYBLER_GL_VERTEX_SHADER, vertex_source);
+    context,
+    NYBLER_GL_VERTEX_SHADER,
+    use_vertex_color ? colored_vertex_source : vertex_source);
   fragment_shader = nybler_compile_shader(
-    context, NYBLER_GL_FRAGMENT_SHADER, fragment_source);
+    context,
+    NYBLER_GL_FRAGMENT_SHADER,
+    use_vertex_color ? colored_fragment_source : fragment_source);
   if (!vertex_shader || !fragment_shader) goto fail;
 
   state = (NyblerMesaPipeline *)calloc(1, sizeof(*state));
@@ -842,6 +864,16 @@ void nybler_mesa_destroy_pipeline(NyblerRenderPipeline *pipeline) {
   }
   free(state);
   pipeline->backend = NULL;
+}
+
+static uint32_t nybler_vertex_components(NyblerVertexFormat format) {
+  switch (format) {
+    case NYBLER_VERTEX_FORMAT_FLOAT32: return 1;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X2: return 2;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X3: return 3;
+    case NYBLER_VERTEX_FORMAT_FLOAT32X4: return 4;
+    default: return 0;
+  }
 }
 
 static NyblerGLenum nybler_primitive_mode(NyblerPrimitiveTopology topology) {
@@ -988,8 +1020,13 @@ NyblerResult nybler_mesa_execute(
       case NYBLER_COMMAND_DRAW: {
         NyblerMesaPipeline *state;
         NyblerGLuint vbo = 0;
+        NyblerGLuint bound_locations[8];
+        size_t bound_count = 0;
+        uint64_t stride;
         uint64_t data_size;
         uint32_t instance;
+        uint32_t components;
+        size_t attribute_index;
 
         if (!pipeline || !pipeline->backend || !vertex_buffer ||
             !primitive || command->data.draw.first_instance != 0) {
@@ -997,7 +1034,24 @@ NyblerResult nybler_mesa_execute(
           goto done;
         }
         state = (NyblerMesaPipeline *)pipeline->backend;
-        data_size = (uint64_t)command->data.draw.vertex_count * 4 * sizeof(float);
+        stride = pipeline->vertex_stride ? pipeline->vertex_stride : 16;
+        if (pipeline->vertex_attribute_count > 8) {
+          result = NYBLER_ERROR_UNSUPPORTED;
+          goto done;
+        }
+        for (attribute_index = 0;
+             attribute_index < pipeline->vertex_attribute_count;
+             ++attribute_index) {
+          const NyblerVertexAttribute *attribute =
+            &pipeline->vertex_attributes[attribute_index];
+          if (attribute->shader_location >= 8 ||
+              !nybler_vertex_components(attribute->format)) {
+            result = NYBLER_ERROR_UNSUPPORTED;
+            goto done;
+          }
+          bound_locations[bound_count++] = attribute->shader_location;
+        }
+        data_size = (uint64_t)command->data.draw.vertex_count * stride;
         if (vertex_offset > vertex_buffer->size ||
             data_size > vertex_buffer->size - vertex_offset) {
           result = NYBLER_ERROR_INVALID_ARGUMENT;
@@ -1012,16 +1066,38 @@ NyblerResult nybler_mesa_execute(
           (NyblerGLsizeiptr)data_size,
           vertex_buffer->data + vertex_offset,
           NYBLER_GL_STATIC_DRAW);
-        context->gl_enable_vertex_attrib_array(0);
-        context->gl_vertex_attrib_pointer(
-          0, 4, NYBLER_GL_FLOAT, NYBLER_GL_FALSE, 0, NULL);
+        if (pipeline->vertex_attribute_count == 0) {
+          context->gl_enable_vertex_attrib_array(0);
+          context->gl_vertex_attrib_pointer(
+            0, 4, NYBLER_GL_FLOAT, NYBLER_GL_FALSE,
+            (NyblerGLsizei)stride, NULL);
+          bound_locations[bound_count++] = 0;
+        } else {
+          for (attribute_index = 0;
+               attribute_index < pipeline->vertex_attribute_count;
+               ++attribute_index) {
+            const NyblerVertexAttribute *attribute =
+              &pipeline->vertex_attributes[attribute_index];
+            components = nybler_vertex_components(attribute->format);
+            context->gl_enable_vertex_attrib_array(attribute->shader_location);
+            context->gl_vertex_attrib_pointer(
+              attribute->shader_location,
+              (NyblerGLint)components,
+              NYBLER_GL_FLOAT,
+              NYBLER_GL_FALSE,
+              (NyblerGLsizei)stride,
+              (const void *)(uintptr_t)attribute->offset);
+          }
+        }
         for (instance = 0; instance < command->data.draw.instance_count; ++instance) {
           context->gl_draw_arrays(
             primitive,
             (NyblerGLint)command->data.draw.first_vertex,
             (NyblerGLsizei)command->data.draw.vertex_count);
         }
-        context->gl_disable_vertex_attrib_array(0);
+        for (attribute_index = 0; attribute_index < bound_count; ++attribute_index) {
+          context->gl_disable_vertex_attrib_array(bound_locations[attribute_index]);
+        }
         context->gl_delete_buffers(1, &vbo);
         break;
       }
