@@ -32,6 +32,7 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - parsed documents and borrowed node handles from HTML bytes
 - node traversal, local names, attributes, and text content
 - style/layout objects, node rectangles, and display-list items
+- programmatic display lists with rect and text items
 - instance/adapter/device
 - buffers, textures, samplers
 - shader modules
@@ -41,7 +42,7 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - Trex-backed NyFont (glyph atlas, sampler, bind group, text pipeline)
 - command encoders and pass encoders
 - texture-to-buffer copy views and buffer readback
-- queue submission and presentation
+- queue submission and texture readback (no windowed present path yet)
 
 `nybler.hpp` stays a thin, header-only layer over that C ABI. GPU objects keep
 WebGPU names (`Buffer`, `Texture`, `CommandEncoder`, `CommandBuffer`); painting
@@ -54,9 +55,12 @@ function.
 pass on destruction. The copy/readback helpers build
 `NyblerImageCopyTexture`/`NyblerImageCopyBuffer` views from wrapper handles,
 and `Queue::submit()` transfers `CommandBuffer` ownership to the C API because
-`nybler_queue_submit()` consumes command buffers. `NyCanvas::draw_picture()`
-forwards a `NyPicture` to `nybler_painter_record()`, and `NyCanvas::set_font()`
-attaches a Trex-backed `NyFont`; no C API names or behavior changed.
+`nybler_queue_submit()` consumes command buffers. `NyPicture::append_rect()`
+and `append_text()` build a list through additive `nybler_display_list_*`
+entry points; `NyCanvas::draw_picture()` plays it through
+`nybler_painter_record()`, and `draw_rect()`/`draw_text()` are one-shot
+conveniences over that path. `NyCanvas::set_font()` attaches a Trex-backed
+`NyFont`. Existing C API names and behavior are unchanged.
 
 Lexbor stays private behind `src/document.c`; callers never see Lexbor types or
 headers in `nybler.h`. Document parsing initializes Lexbor's CSSOM before HTML

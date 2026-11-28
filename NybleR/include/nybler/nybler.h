@@ -429,6 +429,21 @@ NYBLER_API const NyblerDisplayItem *nybler_display_list_item(
   const NyblerDisplayList *list,
   size_t index
 );
+/* Programmatic display lists for immediate drawing. Text is copied into the
+ * list; call nybler_display_list_release() when finished with it. */
+NYBLER_API NyblerResult nybler_display_list_create(NyblerDisplayList **out_list);
+NYBLER_API NyblerResult nybler_display_list_append_rect(
+  NyblerDisplayList *list,
+  const NyblerRect *rect,
+  const NyblerColor *color
+);
+NYBLER_API NyblerResult nybler_display_list_append_text(
+  NyblerDisplayList *list,
+  const NyblerRect *rect,
+  const NyblerColor *color,
+  const char *text,
+  size_t text_length
+);
 NYBLER_API void nybler_display_list_release(NyblerDisplayList *list);
 
 NYBLER_API NyblerResult nybler_shader_module_create(

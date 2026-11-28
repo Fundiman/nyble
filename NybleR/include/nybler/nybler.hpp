@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <string>
 #include <type_traits>
@@ -389,7 +390,31 @@ class NyPicture : public detail::OwnedHandle<NyblerDisplayList, nybler_display_l
   [[nodiscard]] const NyPictureItem *item(std::size_t index) const noexcept {
     return nybler_display_list_item(handle_, index);
   }
+
+  NyblerResult append_rect(const NyRect &rect, const NyPaint &paint) {
+    return nybler_display_list_append_rect(handle_, &rect, &paint.color);
+  }
+
+  NyblerResult append_text(
+    const char *text,
+    std::size_t text_length,
+    const NyRect &rect,
+    const NyPaint &paint
+  ) {
+    return nybler_display_list_append_text(
+      handle_, &rect, &paint.color, text, text_length);
+  }
+
+  NyblerResult append_text(
+    const char *text,
+    const NyRect &rect,
+    const NyPaint &paint
+  ) {
+    return append_text(text, std::strlen(text), rect, paint);
+  }
 };
+
+inline NyblerResult create_picture(NyPicture *out_picture);
 
 class NyCanvas : public detail::OwnedHandle<NyblerPainter, nybler_painter_release> {
  public:
@@ -405,6 +430,53 @@ class NyCanvas : public detail::OwnedHandle<NyblerPainter, nybler_painter_releas
   ) {
     return nybler_painter_record(
       handle_, encoder.native_handle(), &viewport, picture.native_handle(), &render_pass);
+  }
+
+  NyblerResult draw_rect(
+    const NyRect &rect,
+    const NyPaint &paint,
+    CommandEncoder &encoder,
+    const NyViewport &viewport,
+    const NyblerRenderPassDescriptor &render_pass
+  ) {
+    NyPicture picture;
+    NyblerResult result = create_picture(&picture);
+    if (result != NYBLER_OK) return result;
+    result = picture.append_rect(rect, paint);
+    if (result != NYBLER_OK) return result;
+    return draw_picture(picture, encoder, viewport, render_pass);
+  }
+
+  NyblerResult draw_text(
+    const char *text,
+    std::size_t text_length,
+    const NyRect &rect,
+    const NyPaint &paint,
+    NyFont &font,
+    CommandEncoder &encoder,
+    const NyViewport &viewport,
+    const NyblerRenderPassDescriptor &render_pass
+  ) {
+    NyPicture picture;
+    NyblerResult result = create_picture(&picture);
+    if (result != NYBLER_OK) return result;
+    result = picture.append_text(text, text_length, rect, paint);
+    if (result != NYBLER_OK) return result;
+    set_font(font);
+    return draw_picture(picture, encoder, viewport, render_pass);
+  }
+
+  NyblerResult draw_text(
+    const char *text,
+    const NyRect &rect,
+    const NyPaint &paint,
+    NyFont &font,
+    CommandEncoder &encoder,
+    const NyViewport &viewport,
+    const NyblerRenderPassDescriptor &render_pass
+  ) {
+    return draw_text(
+      text, std::strlen(text), rect, paint, font, encoder, viewport, render_pass);
   }
 
   void set_font(NyFont &font) {
@@ -453,6 +525,14 @@ inline NyblerResult create_command_encoder(
 
 inline Queue device_queue(NyblerDevice *device) {
   return Queue(nybler_device_get_queue(device));
+}
+
+inline NyblerResult create_picture(NyPicture *out_picture) {
+  if (!out_picture) return NYBLER_ERROR_INVALID_ARGUMENT;
+  NyblerDisplayList *raw = nullptr;
+  const NyblerResult result = nybler_display_list_create(&raw);
+  if (result == NYBLER_OK) *out_picture = NyPicture(raw);
+  return result;
 }
 
 inline NyblerResult create_picture(NyblerLayout *layout, NyPicture *out_picture) {

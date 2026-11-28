@@ -137,21 +137,83 @@ int main(int argc, char **argv) {
     ) && ok;
 
     nybler::NyPicture picture;
-    ok = check(!picture.valid(), "empty picture wrapper") && ok;
+    ok = check(
+      nybler::create_picture(&picture) == NYBLER_OK && picture.valid(),
+      "create empty picture"
+    ) && ok;
+    const nybler::NyRect box{0.0f, 0.0f, 1.0f, 1.0f};
+    const nybler::NyPaint paint{clear_color};
+    ok = check(picture.append_rect(box, paint) == NYBLER_OK, "append rect") && ok;
+    ok = check(picture.append_text("Ny", box, paint) == NYBLER_OK, "append text") && ok;
+    ok = check(picture.length() == 2, "picture length") && ok;
+    ok = check(
+      picture.item(0) && picture.item(0)->kind == NYBLER_DISPLAY_ITEM_BOX,
+      "picture rect item"
+    ) && ok;
+    ok = check(
+      picture.item(1) && picture.item(1)->kind == NYBLER_DISPLAY_ITEM_TEXT,
+      "picture text item"
+    ) && ok;
+
+    nybler::NyCanvas canvas;
+    ok = check(
+      nybler::create_canvas(device, &canvas) == NYBLER_OK,
+      "create canvas wrapper"
+    ) && ok;
+
+    nybler::CommandEncoder draw_encoder;
+    nybler::CommandBuffer draw_commands;
+    const nybler::NyViewport viewport{width, height};
+
+    ok = check(
+      nybler::create_command_encoder(device, &draw_encoder) == NYBLER_OK,
+      "create draw encoder"
+    ) && ok;
+    ok = check(
+      canvas.draw_picture(picture, draw_encoder, viewport, pass_descriptor) == NYBLER_OK,
+      "draw picture"
+    ) && ok;
+    ok = check(
+      draw_encoder.finish(draw_commands) == NYBLER_OK,
+      "finish draw commands"
+    ) && ok;
+    ok = check(queue.submit(draw_commands) == NYBLER_OK, "submit draw commands") && ok;
+
+    ok = check(
+      nybler::create_command_encoder(device, &draw_encoder) == NYBLER_OK,
+      "create rect encoder"
+    ) && ok;
+    ok = check(
+      canvas.draw_rect(box, paint, draw_encoder, viewport, pass_descriptor) == NYBLER_OK,
+      "draw rect"
+    ) && ok;
+    ok = check(
+      draw_encoder.finish(draw_commands) == NYBLER_OK,
+      "finish rect commands"
+    ) && ok;
+    ok = check(queue.submit(draw_commands) == NYBLER_OK, "submit rect commands") && ok;
 
     if (argc > 1) {
       nybler::NyFont font;
-      nybler::NyCanvas canvas;
       ok = check(
         nybler::create_font(device, argv[1], 16.0f, &font) == NYBLER_OK,
         "create font wrapper"
       ) && ok;
-      ok = check(
-        nybler::create_canvas(device, &canvas) == NYBLER_OK,
-        "create canvas wrapper"
-      ) && ok;
-      if (font.valid() && canvas.valid()) {
-        canvas.set_font(font);
+      if (font.valid()) {
+        ok = check(
+          nybler::create_command_encoder(device, &draw_encoder) == NYBLER_OK,
+          "create text encoder"
+        ) && ok;
+        ok = check(
+          canvas.draw_text(
+            "Ny", box, paint, font, draw_encoder, viewport, pass_descriptor) == NYBLER_OK,
+          "draw text"
+        ) && ok;
+        ok = check(
+          draw_encoder.finish(draw_commands) == NYBLER_OK,
+          "finish text commands"
+        ) && ok;
+        ok = check(queue.submit(draw_commands) == NYBLER_OK, "submit text commands") && ok;
         canvas.clear_font();
       }
     }
@@ -161,7 +223,8 @@ int main(int argc, char **argv) {
   nybler_adapter_release(adapter);
 
   if (ok) {
-    std::puts("nybler cpp api smoke: buffer/NyCanvas/NyFont wrappers, copy/readback ok");
+    std::puts(
+      "nybler cpp api smoke: buffer/NyCanvas/NyFont wrappers, picture drawing, copy/readback ok");
   }
   return ok ? 0 : 1;
 }

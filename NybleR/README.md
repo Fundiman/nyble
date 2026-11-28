@@ -72,7 +72,7 @@ Targets:
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
 - `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
 - `text-smoke` — DOM → layout → display list → Trex glyph atlas → GPU readback smoke test
-- `cpp-api-smoke` — header-only C++ wrapper smoke: buffer write/read, render pass, texture copy, queue submit, readback, and NyCanvas/NyFont ownership
+- `cpp-api-smoke` — header-only C++ wrapper smoke: buffer write/read, render pass, texture copy, queue submit, readback, programmatic NyPicture rect/text drawing, and NyCanvas/NyFont playback
 - `check` — run all nine smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
@@ -125,6 +125,10 @@ without a 256-byte alignment requirement. `nybler_buffer_read()` then exposes
 the result. Backend-specific format or usage rejections are normal WebGPU
 capability behavior.
 
+Programmatic display lists use `nybler_display_list_create()`,
+`nybler_display_list_append_rect()`, and `nybler_display_list_append_text()`.
+Text is copied into the list, and `nybler_display_list_release()` frees it.
+
 The header-only `nybler.hpp` uses WebGPU names for GPU objects (`Buffer`,
 `Texture`, `CommandEncoder`, `RenderPassEncoder`, `CommandBuffer`, `Queue`) and
 NybleR's own Ny-prefixed names for painting (`NyCanvas`, `NyPicture`, `NyFont`,
@@ -137,11 +141,13 @@ write/read helpers, and `CommandEncoder::copy_texture_to_buffer()` builds the
 WebGPU copy views from wrapper handles. `Queue::submit()` detaches submitted
 command buffers because the C API consumes them, preventing double release.
 
-`NyPicture` wraps the display list produced by layout, and
-`NyCanvas::draw_picture()` feeds it to the existing painter bridge.
-`NyCanvas::set_font()` attaches a Trex-backed `NyFont`; `clear_font()` detaches
-it. These are renames only — every call still goes through the stable
-`nybler_*` C ABI.
+`NyPicture` wraps a display list, either produced by layout or built
+programmatically with `append_rect()` and `append_text()`.
+`NyCanvas::draw_picture()` plays it through the existing painter bridge, while
+`draw_rect()` and `draw_text()` are one-shot conveniences that build and submit
+a single-item picture. `NyCanvas::set_font()` attaches a Trex-backed `NyFont`;
+`clear_font()` detaches it. All of this goes through the stable `nybler_*` C
+ABI; the new display-list entry points are additive.
 
 `nybler_painter_create()` and `nybler_painter_record()` bridge layout to GPU
 commands. A painter owns full-WGSL shaders, a render pipeline, and vertex

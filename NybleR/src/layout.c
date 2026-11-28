@@ -49,6 +49,7 @@ struct NyblerLayout {
 struct NyblerDisplayList {
   NyblerDisplayItem *items;
   size_t count;
+  size_t capacity;
 };
 
 typedef struct LayoutContext {
@@ -741,6 +742,7 @@ NyblerResult nybler_layout_display_list(
     free(list);
     return NYBLER_ERROR_OUT_OF_MEMORY;
   }
+  list->capacity = layout->entry_count;
 
   for (i = 0; i < layout->entry_count; i++) {
     const NyblerDisplayItem *source = &layout->entries[i].item;
@@ -774,6 +776,79 @@ const NyblerDisplayItem *nybler_display_list_item(
 ) {
   if (!list || index >= list->count) return NULL;
   return &list->items[index];
+}
+
+static NyblerResult display_list_append_item(
+  NyblerDisplayList *list,
+  NyblerDisplayItem item,
+  const char *text,
+  size_t text_length
+) {
+  if (!grow_array(
+        (void **)&list->items,
+        &list->capacity,
+        list->count,
+        sizeof(*list->items)
+      )) {
+    return NYBLER_ERROR_OUT_OF_MEMORY;
+  }
+  if (text && text_length) {
+    char *copy = (char *)malloc(text_length + 1);
+    if (!copy) return NYBLER_ERROR_OUT_OF_MEMORY;
+    memcpy(copy, text, text_length);
+    copy[text_length] = '\0';
+    item.text = copy;
+  } else {
+    item.text = NULL;
+  }
+  item.text_length = text_length;
+  list->items[list->count++] = item;
+  return NYBLER_OK;
+}
+
+NyblerResult nybler_display_list_create(NyblerDisplayList **out_list) {
+  NyblerDisplayList *list;
+
+  if (!out_list) return NYBLER_ERROR_INVALID_ARGUMENT;
+  *out_list = NULL;
+  list = (NyblerDisplayList *)calloc(1, sizeof(*list));
+  if (!list) return NYBLER_ERROR_OUT_OF_MEMORY;
+  *out_list = list;
+  return NYBLER_OK;
+}
+
+NyblerResult nybler_display_list_append_rect(
+  NyblerDisplayList *list,
+  const NyblerRect *rect,
+  const NyblerColor *color
+) {
+  NyblerDisplayItem item;
+
+  if (!list || !rect || !color) return NYBLER_ERROR_INVALID_ARGUMENT;
+  memset(&item, 0, sizeof(item));
+  item.kind = NYBLER_DISPLAY_ITEM_BOX;
+  item.rect = *rect;
+  item.color = *color;
+  return display_list_append_item(list, item, NULL, 0);
+}
+
+NyblerResult nybler_display_list_append_text(
+  NyblerDisplayList *list,
+  const NyblerRect *rect,
+  const NyblerColor *color,
+  const char *text,
+  size_t text_length
+) {
+  NyblerDisplayItem item;
+
+  if (!list || !rect || !color || !text || !text_length) {
+    return NYBLER_ERROR_INVALID_ARGUMENT;
+  }
+  memset(&item, 0, sizeof(item));
+  item.kind = NYBLER_DISPLAY_ITEM_TEXT;
+  item.rect = *rect;
+  item.color = *color;
+  return display_list_append_item(list, item, text, text_length);
 }
 
 void nybler_display_list_release(NyblerDisplayList *list) {
