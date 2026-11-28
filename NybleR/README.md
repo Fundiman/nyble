@@ -72,7 +72,8 @@ Targets:
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
 - `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
 - `text-smoke` — DOM → layout → display list → Trex glyph atlas → GPU readback smoke test
-- `check` — run all eight smoke tests
+- `cpp-api-smoke` — header-only C++ wrapper smoke: buffer write/read, render pass, texture copy, queue submit, readback, and painter/text renderer ownership
+- `check` — run all nine smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -123,6 +124,15 @@ must be at least the packed row size; rows are packed into the destination
 without a 256-byte alignment requirement. `nybler_buffer_read()` then exposes
 the result. Backend-specific format or usage rejections are normal WebGPU
 capability behavior.
+
+The header-only `nybler.hpp` wraps these flows in RAII types: `Buffer`,
+`Texture`, `CommandEncoder`, `RenderPassEncoder`, `CommandBuffer`, `Queue`,
+`Painter`, and `TextRenderer`. Owned types expose `native_handle()`, `valid()`,
+`reset()`, and move semantics; render pass encoders and queues borrow their
+parent. `Buffer` adds typed and byte-vector write/read helpers, and
+`CommandEncoder::copy_texture_to_buffer()` builds the WebGPU copy views from
+wrapper handles. `Queue::submit()` detaches submitted command buffers because
+the C API consumes them, preventing double release.
 
 `nybler_painter_create()` and `nybler_painter_record()` bridge layout to GPU
 commands. A painter owns full-WGSL shaders, a render pipeline, and vertex

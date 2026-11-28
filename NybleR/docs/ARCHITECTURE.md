@@ -43,6 +43,15 @@ The API is WebGPU-shaped for rendering and DOM-shaped for platform work:
 - texture-to-buffer copy views and buffer readback
 - queue submission and presentation
 
+`nybler.hpp` stays a thin, header-only layer over that C ABI. Owned wrappers
+(`Buffer`, `Texture`, `CommandEncoder`, `CommandBuffer`, `Painter`, and
+`TextRenderer`) delete copy, support move, and release through the matching
+`nybler_*_release()` function. `RenderPassEncoder` and `Queue` are borrowed
+handles; the former ends an open pass on destruction. The copy/readback helpers
+build `NyblerImageCopyTexture`/`NyblerImageCopyBuffer` views from wrapper
+handles, and `Queue::submit()` transfers `CommandBuffer` ownership to the C API
+because `nybler_queue_submit()` consumes command buffers.
+
 Lexbor stays private behind `src/document.c`; callers never see Lexbor types or
 headers in `nybler.h`. Document parsing initializes Lexbor's CSSOM before HTML
 parsing, so `<style>` text and `style` attributes are parsed and cascaded by

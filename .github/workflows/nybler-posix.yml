@@ -7,10 +7,11 @@ name: nybler-posix
 # depot_tools/gclient sync plus local glslang + Mesa EGL/GLES software-driver
 # builds and the Trex/FreeType/HarfBuzz stack. Those are heavy renderer builds,
 # not portable source checks. This job builds the POSIX-portable Lexbor target,
-# compiles the real DOM/layout/instance/resource/paint C sources, exercises the
-# real dlopen/dlsym backend loader with a mock shared library, and supplies
-# small stubs only for the Tint/Mesa GL/Trex bridges so the public C smoke tests
-# can be compiled and the deterministic non-GPU ones executed.
+# compiles the real DOM/layout/instance/resource/paint C sources and the C++
+# wrapper smoke, exercises the real dlopen/dlsym backend loader with a mock
+# shared library, and supplies small stubs only for the Tint/Mesa GL/Trex
+# bridges so the public C/C++ smoke tests can be compiled and the deterministic
+# non-GPU ones executed.
 
 on:
   workflow_dispatch:
@@ -65,6 +66,7 @@ jobs:
         working-directory: NybleR
         env:
           CC: clang
+          CXX: clang++
         run: |
           set -eu
 
@@ -292,7 +294,9 @@ jobs:
 
           PREFIX="$PWD/build/local"
           CC="${CC:-clang}"
+          CXX="${CXX:-clang++}"
           CFLAGS="-std=c11 -DLEXBOR_STATIC -Iinclude -Isrc -I$PREFIX/include"
+          CXXFLAGS="-std=c++17 -Iinclude -Isrc -I$PREFIX/include"
           LEXBOR_LIB="$PREFIX/lib/liblexbor_static.a"
 
           SOURCES="
@@ -313,6 +317,14 @@ jobs:
             OBJECTS="$OBJECTS $object"
           done
 
+          # Compile/link the header-only C++ wrapper smoke against the same
+          # stubs. It skips at runtime here because no Mesa GL backend exists.
+          $CXX $CXXFLAGS -c -o build/posix-ci/cpp_api_smoke.o \
+            tests/cpp_api_smoke.cpp
+          $CXX -o build/posix-ci/cpp_api_smoke \
+            build/posix-ci/cpp_api_smoke.o $OBJECTS \
+            "$LEXBOR_LIB" -lm -ldl -lpthread
+
           for test in version dom layout shader bind_group resources mesa paint text; do
             test_source="tests/${test}_smoke.c"
             if [ "$test" = "version" ]; then
@@ -332,3 +344,6 @@ jobs:
             echo "== nybler ${test} smoke =="
             "./build/posix-ci/${test}_smoke"
           done
+
+          echo "== nybler cpp api smoke =="
+          "./build/posix-ci/cpp_api_smoke"

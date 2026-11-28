@@ -96,7 +96,8 @@ MESA_STAMP := $(STAMP_DIR)/mesa.stamp
 TREX_STAMP := $(STAMP_DIR)/trex.stamp
 NYBLER_STAMP := $(STAMP_DIR)/nybler.stamp
 NYBLER_SOURCES := $(wildcard $(CURDIR)/src/*.c $(CURDIR)/src/*.cpp \
-	$(CURDIR)/src/*.h $(CURDIR)/include/nybler/*.h $(CURDIR)/CMakeLists.txt)
+	$(CURDIR)/src/*.h $(CURDIR)/include/nybler/*.h \
+	$(CURDIR)/include/nybler/*.hpp $(CURDIR)/CMakeLists.txt)
 
 WINFLEXBISON_VERSION ?= 2.5.25
 WINFLEXBISON_URL ?= https://github.com/lexxmark/winflexbison/releases/download/v$(WINFLEXBISON_VERSION)/win_flex_bison-$(WINFLEXBISON_VERSION).zip
@@ -115,6 +116,7 @@ RESOURCES_SMOKE_BIN := $(CURDIR)/$(BUILD)/resources-smoke$(if $(filter Windows_N
 MESA_SMOKE_BIN := $(CURDIR)/$(BUILD)/mesa-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 PAINT_SMOKE_BIN := $(CURDIR)/$(BUILD)/paint-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 TEXT_SMOKE_BIN := $(CURDIR)/$(BUILD)/text-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+CPP_API_SMOKE_BIN := $(CURDIR)/$(BUILD)/cpp-api-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 ifeq ($(OS),Windows_NT)
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
@@ -124,6 +126,7 @@ RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.obj
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.obj
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.obj
 TEXT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/text-smoke.obj
+CPP_API_SMOKE_OBJ := $(CURDIR)/$(BUILD)/cpp-api-smoke.obj
 LEXBOR_LIB ?= $(PREFIX)/lib/lexbor_static.lib
 NYBLER_LIB ?= $(NYBLER_BUILD)/nybler.lib
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/tint*.lib)
@@ -131,6 +134,9 @@ NYBLER_ABSL_LIBS = $(wildcard $(PREFIX)/lib/absl*.lib)
 # clang++ on Windows uses the MSVC ABI and lld-link by default, so GNU linker
 # flags such as -static-libstdc++ and --start-group are ignored there.
 NYBLER_CXX_LINK_FLAGS ?=
+# The NybleR CMake build uses the MSVC dynamic CRT on Windows. Match it so the
+# header-only C++ smoke can link against text.cpp and the Tint C++ libraries.
+NYBLER_CXX_RUNTIME_FLAGS ?= $(if $(filter Windows_NT,$(OS)),-D_DLL -D_MT -Xclang --dependent-lib=msvcrt,)
 NYBLER_LINK_TINT = $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) $(NYBLER_ABSL_LIBS)
 NYBLER_LINK_TREX = $(PREFIX)/lib/trex.lib $(PREFIX)/lib/freetype.lib $(PREFIX)/lib/harfbuzz.lib
 else
@@ -142,6 +148,7 @@ RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.o
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.o
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.o
 TEXT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/text-smoke.o
+CPP_API_SMOKE_OBJ := $(CURDIR)/$(BUILD)/cpp-api-smoke.o
 LEXBOR_LIB ?= $(PREFIX)/lib/liblexbor_static.a
 NYBLER_LIB ?= $(NYBLER_BUILD)/libnybler.a
 NYBLER_TINT_LIBS = $(wildcard $(PREFIX)/lib/libtint*.a)
@@ -151,7 +158,7 @@ NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl
 NYBLER_LINK_TREX = -Wl,--start-group $(PREFIX)/lib/libtrex.a $(PREFIX)/lib/libfreetype.a $(PREFIX)/lib/libharfbuzz.a -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa trex nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa trex nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke cpp-api-smoke check clean
 
 all: deps nybler
 
@@ -374,7 +381,16 @@ text-smoke: nybler lexbor trex
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(TEXT_SMOKE_BIN) "$(TREX_SRC)/examples/fonts/Roboto-Regular.ttf"
 
-check: nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke
+cpp-api-smoke: nybler lexbor trex
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CXX) -std=c++17 $(NYBLER_CXX_RUNTIME_FLAGS) -I$(CURDIR)/include \
+		-c -o $(CPP_API_SMOKE_OBJ) $(CURDIR)/tests/cpp_api_smoke.cpp
+	$(NYBLER_CXX) $(NYBLER_CXX_RUNTIME_FLAGS) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(CPP_API_SMOKE_BIN) $(CPP_API_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
+	$(NYBLER_PATH_ENV) $(CPP_API_SMOKE_BIN) "$(TREX_SRC)/examples/fonts/Roboto-Regular.ttf"
+
+check: nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke cpp-api-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:
