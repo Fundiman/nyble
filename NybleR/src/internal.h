@@ -34,6 +34,9 @@ struct NyblerShaderModule {
   NyblerShaderFormat format;
   uint8_t *code;
   size_t code_size;
+  /* Original WGSL text, retained for pipeline-specific GLSL generation. */
+  uint8_t *source;
+  size_t source_size;
   char *label;
 };
 
@@ -112,6 +115,11 @@ struct NyblerRenderPipeline {
   NyblerVertexAttribute *vertex_attributes;
   size_t vertex_attribute_count;
   uint32_t vertex_stride;
+  /* Pipeline-specific GLSL ES 300 generated from the modules' WGSL. */
+  char *vertex_glsl;
+  size_t vertex_glsl_size;
+  char *fragment_glsl;
+  size_t fragment_glsl_size;
   char *label;
   void *backend;
 };

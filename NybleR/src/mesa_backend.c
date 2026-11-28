@@ -359,6 +359,9 @@ typedef struct NyblerMesaTexture {
 
 typedef struct NyblerMesaPipeline {
   NyblerGLuint program;
+  /* Combined sampler uniforms found in the pipeline's generated GLSL. */
+  char **sampler_uniforms;
+  size_t sampler_count;
 } NyblerMesaPipeline;
 
 static void *nybler_load_library(const char *const *names) {
@@ -755,15 +758,19 @@ void nybler_mesa_destroy_texture(NyblerTexture *texture) {
 static NyblerGLuint nybler_compile_shader(
   NyblerMesaContext *context,
   NyblerGLenum type,
-  const char *source
+  const char *source,
+  size_t source_size
 ) {
   NyblerGLuint shader;
   NyblerGLint compiled = 0;
+  NyblerGLint length;
   char log[1024];
 
+  if (source_size > 0x7fffffffu) return 0;
   shader = context->gl_create_shader(type);
   if (!shader) return 0;
-  context->gl_shader_source(shader, 1, &source, NULL);
+  length = (NyblerGLint)source_size;
+  context->gl_shader_source(shader, 1, &source, &length);
   context->gl_compile_shader(shader);
   context->gl_get_shaderiv(shader, NYBLER_GL_COMPILE_STATUS, &compiled);
   if (!compiled) {
@@ -776,68 +783,78 @@ static NyblerGLuint nybler_compile_shader(
   return shader;
 }
 
+/* Tint combines each texture/sampler pair into a single GLSL sampler uniform.
+ * Collect those names from the generated source so the backend can bind the
+ * textures supplied by a bind group without hardcoding uniform names. */
+static void nybler_collect_sampler_uniforms(
+  const char *glsl,
+  size_t size,
+  char ***names,
+  size_t *count
+) {
+  static const char sampler_token[] = "sampler2D";
+  size_t offset = 0;
+
+  while (offset + sizeof(sampler_token) - 1 <= size) {
+    size_t start;
+    size_t end;
+    size_t i;
+    int duplicate = 0;
+
+    if (memcmp(glsl + offset, sampler_token, sizeof(sampler_token) - 1) != 0) {
+      ++offset;
+      continue;
+    }
+    start = offset + sizeof(sampler_token) - 1;
+    while (start < size && (glsl[start] == ' ' || glsl[start] == '\t')) ++start;
+    end = start;
+    while (end < size && (
+      (glsl[end] >= 'a' && glsl[end] <= 'z') ||
+      (glsl[end] >= 'A' && glsl[end] <= 'Z') ||
+      (glsl[end] >= '0' && glsl[end] <= '9') ||
+      glsl[end] == '_')) {
+      ++end;
+    }
+    if (end == start) {
+      offset = start;
+      continue;
+    }
+    for (i = 0; i < *count; ++i) {
+      if (strlen((*names)[i]) == end - start &&
+          memcmp((*names)[i], glsl + start, end - start) == 0) {
+        duplicate = 1;
+        break;
+      }
+    }
+    if (!duplicate) {
+      char **grown = (char **)realloc(*names, (*count + 1) * sizeof(*grown));
+      if (grown) {
+        char *name = (char *)malloc(end - start + 1);
+        if (name) {
+          memcpy(name, glsl + start, end - start);
+          name[end - start] = '\0';
+          grown[*count] = name;
+          *names = grown;
+          ++*count;
+        }
+      }
+    }
+    offset = end;
+  }
+}
+
+static void nybler_mesa_pipeline_release_samplers(NyblerMesaPipeline *state) {
+  size_t i;
+  for (i = 0; i < state->sampler_count; ++i) free(state->sampler_uniforms[i]);
+  free(state->sampler_uniforms);
+  state->sampler_uniforms = NULL;
+  state->sampler_count = 0;
+}
+
 NyblerResult nybler_mesa_create_pipeline(
   NyblerMesaContext *context,
   NyblerRenderPipeline *pipeline
 ) {
-  static const char *vertex_source =
-    "#version 300 es\n"
-    "layout(location = 0) in vec4 position;\n"
-    "void main() {\n"
-    "  gl_Position = position;\n"
-    "}\n";
-  static const char *fragment_source =
-    "#version 300 es\n"
-    "precision mediump float;\n"
-    "out vec4 out_color;\n"
-    "void main() {\n"
-    "  out_color = vec4(1.0, 0.0, 1.0, 1.0);\n"
-    "}\n";
-  static const char *colored_vertex_source =
-    "#version 300 es\n"
-    "layout(location = 0) in vec2 position;\n"
-    "layout(location = 1) in vec4 color;\n"
-    "out vec4 fragment_color;\n"
-    "void main() {\n"
-    "  gl_Position = vec4(position, 0.0, 1.0);\n"
-    "  fragment_color = color;\n"
-    "}\n";
-  static const char *colored_fragment_source =
-    "#version 300 es\n"
-    "precision mediump float;\n"
-    "in vec4 fragment_color;\n"
-    "out vec4 out_color;\n"
-    "void main() {\n"
-    "  out_color = fragment_color;\n"
-    "}\n";
-  static const char *textured_vertex_source =
-    "#version 300 es\n"
-    "layout(location = 0) in vec2 position;\n"
-    "layout(location = 1) in vec2 uv;\n"
-    "layout(location = 2) in vec4 color;\n"
-    "out vec2 fragment_uv;\n"
-    "out vec4 fragment_color;\n"
-    "void main() {\n"
-    "  gl_Position = vec4(position, 0.0, 1.0);\n"
-    "  fragment_uv = uv;\n"
-    "  fragment_color = color;\n"
-    "}\n";
-  static const char *textured_fragment_source =
-    "#version 300 es\n"
-    "precision mediump float;\n"
-    "in vec2 fragment_uv;\n"
-    "in vec4 fragment_color;\n"
-    "uniform sampler2D glyph_atlas;\n"
-    "out vec4 out_color;\n"
-    "void main() {\n"
-    "  float coverage = texture(glyph_atlas, fragment_uv).a;\n"
-    "  out_color = vec4(fragment_color.rgb, fragment_color.a * coverage);\n"
-    "}\n";
-  int use_vertex_color = pipeline && pipeline->vertex_attribute_count >= 2 &&
-    pipeline->vertex_attribute_count < 3;
-  int use_textured = pipeline && pipeline->vertex_attribute_count >= 3;
-  const char *chosen_vertex;
-  const char *chosen_fragment;
   NyblerMesaPipeline *state;
   NyblerGLuint vertex_shader = 0;
   NyblerGLuint fragment_shader = 0;
@@ -846,22 +863,20 @@ NyblerResult nybler_mesa_create_pipeline(
 
   if (!pipeline) return NYBLER_ERROR_INVALID_ARGUMENT;
   if (!context || !context->ready) return NYBLER_OK;
-  if (!pipeline->vertex_module || !pipeline->fragment_module ||
-      !pipeline->vertex_module->code_size || !pipeline->fragment_module->code_size) {
-    return NYBLER_ERROR_INVALID_ARGUMENT;
+  if (!pipeline->vertex_glsl || !pipeline->fragment_glsl ||
+      !pipeline->vertex_glsl_size || !pipeline->fragment_glsl_size) {
+    return NYBLER_ERROR_UNSUPPORTED;
   }
   if (!nybler_mesa_make_current(context)) {
     return NYBLER_ERROR_BACKEND_UNAVAILABLE;
   }
 
-  chosen_vertex = use_textured ? textured_vertex_source :
-    (use_vertex_color ? colored_vertex_source : vertex_source);
-  chosen_fragment = use_textured ? textured_fragment_source :
-    (use_vertex_color ? colored_fragment_source : fragment_source);
   vertex_shader = nybler_compile_shader(
-    context, NYBLER_GL_VERTEX_SHADER, chosen_vertex);
+    context, NYBLER_GL_VERTEX_SHADER,
+    pipeline->vertex_glsl, pipeline->vertex_glsl_size);
   fragment_shader = nybler_compile_shader(
-    context, NYBLER_GL_FRAGMENT_SHADER, chosen_fragment);
+    context, NYBLER_GL_FRAGMENT_SHADER,
+    pipeline->fragment_glsl, pipeline->fragment_glsl_size);
   if (!vertex_shader || !fragment_shader) goto fail;
 
   state = (NyblerMesaPipeline *)calloc(1, sizeof(*state));
@@ -884,6 +899,13 @@ NyblerResult nybler_mesa_create_pipeline(
     free(state);
     goto fail;
   }
+
+  nybler_collect_sampler_uniforms(
+    pipeline->vertex_glsl, pipeline->vertex_glsl_size,
+    &state->sampler_uniforms, &state->sampler_count);
+  nybler_collect_sampler_uniforms(
+    pipeline->fragment_glsl, pipeline->fragment_glsl_size,
+    &state->sampler_uniforms, &state->sampler_count);
 
   context->gl_delete_shader(vertex_shader);
   context->gl_delete_shader(fragment_shader);
@@ -908,6 +930,7 @@ void nybler_mesa_destroy_pipeline(NyblerRenderPipeline *pipeline) {
   if (context && nybler_mesa_make_current(context)) {
     context->gl_delete_program(state->program);
   }
+  nybler_mesa_pipeline_release_samplers(state);
   free(state);
   pipeline->backend = NULL;
 }
@@ -1111,34 +1134,41 @@ NyblerResult nybler_mesa_execute(
         }
 
         context->gl_use_program(state->program);
-        if (pipeline->vertex_attribute_count >= 3) {
-          NyblerMesaTexture *atlas = NULL;
+        if (state->sampler_count) {
+          NyblerGLenum texture_unit = 0;
           size_t binding_index;
 
-          if (!bind_group) {
-            result = NYBLER_ERROR_UNSUPPORTED;
-            goto done;
-          }
-          for (binding_index = 0;
-               binding_index < bind_group->entry_count;
-               ++binding_index) {
-            const NyblerBindGroupEntryStorage *entry =
-              &bind_group->entries[binding_index];
-            if (entry->binding_type == NYBLER_BINDING_TYPE_TEXTURE &&
-                entry->texture) {
-              atlas = (NyblerMesaTexture *)entry->texture->backend;
-              break;
-            }
-          }
-          if (!atlas || !context->gl_active_texture ||
+          if (!bind_group || !context->gl_active_texture ||
               !context->gl_get_uniform_location || !context->gl_uniform_1i) {
             result = NYBLER_ERROR_UNSUPPORTED;
             goto done;
           }
-          context->gl_active_texture(NYBLER_GL_TEXTURE0);
-          context->gl_bind_texture(NYBLER_GL_TEXTURE_2D, atlas->texture);
-          context->gl_uniform_1i(
-            context->gl_get_uniform_location(state->program, "glyph_atlas"), 0);
+          for (binding_index = 0;
+               binding_index < bind_group->entry_count &&
+               texture_unit < state->sampler_count;
+               ++binding_index) {
+            const NyblerBindGroupEntryStorage *entry =
+              &bind_group->entries[binding_index];
+            NyblerMesaTexture *sampled;
+
+            if (entry->binding_type != NYBLER_BINDING_TYPE_TEXTURE ||
+                !entry->texture) {
+              continue;
+            }
+            sampled = (NyblerMesaTexture *)entry->texture->backend;
+            if (!sampled) continue;
+            context->gl_active_texture(NYBLER_GL_TEXTURE0 + texture_unit);
+            context->gl_bind_texture(NYBLER_GL_TEXTURE_2D, sampled->texture);
+            context->gl_uniform_1i(
+              context->gl_get_uniform_location(
+                state->program, state->sampler_uniforms[texture_unit]),
+              (NyblerGLint)texture_unit);
+            ++texture_unit;
+          }
+          if (texture_unit == 0) {
+            result = NYBLER_ERROR_UNSUPPORTED;
+            goto done;
+          }
         }
         context->gl_gen_buffers(1, &vbo);
         context->gl_bind_buffer(NYBLER_GL_ARRAY_BUFFER, vbo);

@@ -17,6 +17,34 @@ NyblerResult nybler_tint_compile(
   char **out_error
 );
 
+/* WGSL binding point -> flat GLSL binding number. */
+typedef struct NyblerGlslBinding {
+  uint32_t group;
+  uint32_t binding;
+  uint32_t glsl_binding;
+} NyblerGlslBinding;
+
+typedef enum NyblerGlslStage {
+  NYBLER_GLSL_STAGE_UNKNOWN = 0,
+  NYBLER_GLSL_STAGE_VERTEX,
+  NYBLER_GLSL_STAGE_FRAGMENT
+} NyblerGlslStage;
+
+/* Generate GLSL ES 300 for one pipeline entry point. Unlike the standalone
+ * compiler, this uses the pipeline's entry point name and binds every WGSL
+ * resource at the flat binding number assigned by the pipeline layout. */
+NyblerResult nybler_tint_translate_glsl(
+  const void *source,
+  size_t source_size,
+  const char *entry_point,
+  NyblerGlslStage stage,
+  const NyblerGlslBinding *bindings,
+  size_t binding_count,
+  uint8_t **out_code,
+  size_t *out_code_size,
+  char **out_error
+);
+
 #ifdef __cplusplus
 }
 #endif

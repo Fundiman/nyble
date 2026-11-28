@@ -1,5 +1,6 @@
 #include "internal.h"
 #include "mesa_backend.h"
+#include "shader_bridge.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -403,6 +404,79 @@ void nybler_bind_group_release(NyblerBindGroup *group) {
   free(group);
 }
 
+/* Generate the GLSL ES 300 programs that the Mesa backend compiles. The
+ * binding map comes from this pipeline's layout, so the generated code is a
+ * translation of these exact modules and entry points, not a fixed program. */
+static NyblerResult nybler_pipeline_translate_glsl(NyblerRenderPipeline *pipeline) {
+  NyblerGlslBinding *bindings = NULL;
+  size_t binding_count = 0;
+  uint8_t *code = NULL;
+  size_t code_size = 0;
+  char *error = NULL;
+  NyblerResult result;
+  size_t i;
+
+  if (!pipeline->vertex_module->source || !pipeline->fragment_module->source) {
+    return NYBLER_ERROR_UNSUPPORTED;
+  }
+  if (pipeline->layout) {
+    binding_count = pipeline->layout->entry_count;
+    if (binding_count) {
+      bindings = (NyblerGlslBinding *)calloc(
+        binding_count, sizeof(*bindings));
+      if (!bindings) return NYBLER_ERROR_OUT_OF_MEMORY;
+      for (i = 0; i < binding_count; ++i) {
+        bindings[i].group = 0;
+        bindings[i].binding = pipeline->layout->entries[i].binding;
+        bindings[i].glsl_binding = pipeline->layout->entries[i].binding;
+      }
+    }
+  }
+
+  result = nybler_tint_translate_glsl(
+    pipeline->vertex_module->source,
+    pipeline->vertex_module->source_size,
+    pipeline->vertex_entry_point,
+    NYBLER_GLSL_STAGE_VERTEX,
+    bindings,
+    binding_count,
+    &code,
+    &code_size,
+    &error
+  );
+  nybler_string_release(error);
+  error = NULL;
+  if (result != NYBLER_OK) goto fail;
+  pipeline->vertex_glsl = (char *)code;
+  pipeline->vertex_glsl_size = code_size;
+  code = NULL;
+
+  result = nybler_tint_translate_glsl(
+    pipeline->fragment_module->source,
+    pipeline->fragment_module->source_size,
+    pipeline->fragment_entry_point,
+    NYBLER_GLSL_STAGE_FRAGMENT,
+    bindings,
+    binding_count,
+    &code,
+    &code_size,
+    &error
+  );
+  nybler_string_release(error);
+  if (result != NYBLER_OK) goto fail;
+  pipeline->fragment_glsl = (char *)code;
+  pipeline->fragment_glsl_size = code_size;
+  code = NULL;
+
+  free(bindings);
+  return NYBLER_OK;
+
+fail:
+  nybler_shader_code_release(code);
+  free(bindings);
+  return result;
+}
+
 NyblerResult nybler_device_create_render_pipeline(
   NyblerDevice *device,
   const NyblerRenderPipelineDescriptor *descriptor,
@@ -490,6 +564,13 @@ NyblerResult nybler_device_create_render_pipeline(
   pipeline->target_count = descriptor->target_count;
   pipeline->topology = descriptor->topology;
   pipeline->layout = descriptor->layout;
+  if (device->backend == NYBLER_BACKEND_MESA_GL && device->backend_context) {
+    result = nybler_pipeline_translate_glsl(pipeline);
+    if (result != NYBLER_OK) {
+      nybler_render_pipeline_release(pipeline);
+      return result;
+    }
+  }
   result = nybler_mesa_create_pipeline(
     (NyblerMesaContext *)device->backend_context, pipeline);
   if (result != NYBLER_OK) {
@@ -503,6 +584,8 @@ NyblerResult nybler_device_create_render_pipeline(
 void nybler_render_pipeline_release(NyblerRenderPipeline *pipeline) {
   if (!pipeline) return;
   nybler_mesa_destroy_pipeline(pipeline);
+  free(pipeline->vertex_glsl);
+  free(pipeline->fragment_glsl);
   free(pipeline->label);
   free(pipeline->vertex_entry_point);
   free(pipeline->fragment_entry_point);

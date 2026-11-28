@@ -84,13 +84,11 @@ Mesa, so Dawn/Mesa details stay private. `NYBLER_BACKEND_AUTO` falls back to the
 null backend when Mesa cannot initialize; explicit Mesa GL reports
 `NYBLER_ERROR_BACKEND_UNAVAILABLE`.
 
-The Mesa draw path now honors bind groups for the textured pipeline: it resolves
-the atlas texture from the bound bind group, binds it to texture unit 0, and
-sets the `glyph_atlas` sampler uniform. The colored and textured GLSL ES 300
-programs are still fixed validation programs; full WGSL from every shader module
-is compiled and validated to SPIR-V by Tint at creation time, so the fixed GLSL
-only limits the visual fidelity of the software validation path, not the
-accepted WGSL language.
+The Mesa draw path honors bind groups generically: it discovers the combined
+sampler uniforms emitted by Tint in the pipeline's generated GLSL, resolves the
+bound textures, and assigns them to successive texture units. No sampler name is
+hardcoded in the backend. The colored and textured programs are translations of
+their own WGSL modules and entry points, not fixed validation shaders.
 
 Dawn, SDL3 GPU, and raylib are not the public API. They are possible future
 implementation details behind this surface.
@@ -99,25 +97,35 @@ implementation details behind this surface.
 
 NybleR accepts full WGSL source through Tint. The preferred binary IR is SPIR-V.
 `src/shader_bridge.cpp` is the only C++ file that includes Tint headers; it
-exposes a small `extern "C"` entry point used by `src/instance.c`.
+exposes small `extern "C"` entry points used by `src/instance.c` and
+`src/resources.c`.
 
 ```text
 WGSL → Tint → SPIR-V → Vulkan/lavapipe
-WGSL → Tint/GLSL → OpenGL/llvmpipe
+WGSL → Tint → SPIR-V (validation) + Tint AST → GLSL ES 300 → Mesa GL
 SPIR-V input → magic/alignment check → Vulkan/lavapipe
 ```
 
 `nybler_shader_compile()` exposes standalone compilation for tooling and tests.
 Shader modules always store SPIR-V; failures carry Tint diagnostics through the
-optional `out_error` parameter. The local Mesa GL backend currently validates
-pipeline creation with fixed GLSL ES 300 programs instead of translating each
-pipeline's WGSL entry points. Three fixed variants exist: the legacy magenta
-program for pipelines without explicit vertex attributes, a position/color
-program for pipelines with location 0 and location 1 attributes (used by the
-paint bridge), and a position/UV/color program with a `glyph_atlas` sampler for
-the Trex text pipeline. Full WGSL is still parsed, validated, and compiled to
-SPIR-V when the shader module is created; using fixed GLSL only limits the
-visual output of the software validation path, not the accepted WGSL language.
+optional `out_error` parameter. Every WGSL module is still parsed, validated,
+and compiled to SPIR-V at creation time, including modules used by Mesa GL.
+
+The Mesa GL path generates pipeline-specific GLSL from the original WGSL source
+retained on each module. `nybler_device_create_render_pipeline()` asks Tint to
+generate GLSL for that pipeline's exact vertex and fragment entry points and
+remaps WGSL bindings to the flat bindings assigned by the pipeline layout.
+`nybler_tint_translate_glsl()` uses Tint's AST-based `Generate()` path: this
+Tint snapshot's IR GLSL printer is a stub that raises an ICE on `core::ir::Var`,
+while the AST path is complete and is what the Tint CLI uses.
+
+Before handing GLSL to Mesa, the bridge runs Tint's `Renamer` transform for GLSL
+keywords, canonicalizes inter-stage variable names by `@location`, and drops
+explicit locations that GLSL ES 300 does not allow on fragment inputs or vertex
+outputs. Vertex input and fragment output locations are preserved. The Mesa
+backend compiles those exact strings and discovers sampler uniforms from the
+generated source. A raw SPIR-V module has no WGSL to translate and is rejected
+by the Mesa GL backend as a backend capability error.
 
 Backend capability checks are not a WGSL subset parser. A shader may compile as
 full WGSL and still be rejected by a specific backend when it uses features that

@@ -16,6 +16,7 @@ int main(void) {
     "}\n";
   static const char invalid_wgsl[] = "fn main() {";
   static const unsigned char spirv_magic[4] = {0x03, 0x02, 0x23, 0x07};
+  static const char glsl_version[] = "#version 300 es";
 
   NyblerInitOptions options = {1, NYBLER_BACKEND_AUTO, 1, NULL};
   NyblerInstance *instance = NULL;
@@ -88,8 +89,9 @@ int main(void) {
     "compile WGSL to GLSL"
   ) && ok;
   ok = check(
-    glsl && glsl_size >= 8 && memcmp(glsl, "#version", 8) == 0,
-    "GLSL version header"
+    glsl && glsl_size >= sizeof(glsl_version) - 1 &&
+    memcmp(glsl, glsl_version, sizeof(glsl_version) - 1) == 0,
+    "GLSL ES 300 version header"
   ) && ok;
 
   ok = check(

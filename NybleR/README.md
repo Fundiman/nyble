@@ -125,9 +125,11 @@ and a textured render pipeline. Attach it to a painter with
 must stay alive while commands are in use. After attachment, visible `TEXT`
 display items are shaped into glyph quads with UVs and drawn in the same render
 pass as colored boxes. `NyblerTextureDescriptor.initial_data` supplies the
-atlas upload. The Mesa backend binds the atlas through a functional bind group
-and samples coverage in the textured GLSL variant; both the colored and textured
-shader modules are still fully validated as WGSL and compiled to SPIR-V by Tint.
+atlas upload. The Mesa backend discovers the combined sampler uniform Tint emits
+for that bind group and samples coverage from the atlas; both the colored and
+textured shader modules are fully validated as WGSL and compiled to SPIR-V by
+Tint. Render-pipeline creation translates each module's own WGSL entry point to
+GLSL ES 300, so these are pipeline-specific programs rather than fixed variants.
 
 `depot_tools`, CMake, Ninja, Meson, Python, and an LLVM-capable toolchain are
 build tools. No Rust bootstrap, MSVC, BoringSSL, or WSL is required. NybleR uses

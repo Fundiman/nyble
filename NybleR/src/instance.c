@@ -191,6 +191,15 @@ NyblerResult nybler_shader_module_create(
   module->code = compiled;
   module->code_size = compiled_size;
   module->label = label_copy;
+  if (format == NYBLER_SHADER_FORMAT_WGSL) {
+    module->source = (uint8_t *)malloc(code_size ? code_size : 1);
+    if (!module->source) {
+      nybler_shader_module_release(module);
+      return NYBLER_ERROR_OUT_OF_MEMORY;
+    }
+    if (code_size) memcpy(module->source, code, code_size);
+    module->source_size = code_size;
+  }
   *out_module = module;
   return NYBLER_OK;
 }
@@ -198,6 +207,7 @@ NyblerResult nybler_shader_module_create(
 void nybler_shader_module_release(NyblerShaderModule *module) {
   if (!module) return;
   nybler_shader_code_release(module->code);
+  nybler_shader_code_release(module->source);
   free(module->label);
   free(module);
 }
