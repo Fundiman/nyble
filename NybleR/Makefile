@@ -110,6 +110,7 @@ MESA_ARGS ?= -Dllvm=disabled -Dgallium-drivers=softpipe -Dvulkan-drivers=[] -Deg
 DOM_SMOKE_BIN := $(CURDIR)/$(BUILD)/dom-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 LAYOUT_SMOKE_BIN := $(CURDIR)/$(BUILD)/layout-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 SHADER_SMOKE_BIN := $(CURDIR)/$(BUILD)/shader-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
+BIND_GROUP_SMOKE_BIN := $(CURDIR)/$(BUILD)/bind-group-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 RESOURCES_SMOKE_BIN := $(CURDIR)/$(BUILD)/resources-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 MESA_SMOKE_BIN := $(CURDIR)/$(BUILD)/mesa-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
 PAINT_SMOKE_BIN := $(CURDIR)/$(BUILD)/paint-smoke$(if $(filter Windows_NT,$(OS)),.exe,)
@@ -118,6 +119,7 @@ ifeq ($(OS),Windows_NT)
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.obj
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.obj
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.obj
+BIND_GROUP_SMOKE_OBJ := $(CURDIR)/$(BUILD)/bind-group-smoke.obj
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.obj
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.obj
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.obj
@@ -135,6 +137,7 @@ else
 DOM_SMOKE_OBJ := $(CURDIR)/$(BUILD)/dom-smoke.o
 LAYOUT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/layout-smoke.o
 SHADER_SMOKE_OBJ := $(CURDIR)/$(BUILD)/shader-smoke.o
+BIND_GROUP_SMOKE_OBJ := $(CURDIR)/$(BUILD)/bind-group-smoke.o
 RESOURCES_SMOKE_OBJ := $(CURDIR)/$(BUILD)/resources-smoke.o
 MESA_SMOKE_OBJ := $(CURDIR)/$(BUILD)/mesa-smoke.o
 PAINT_SMOKE_OBJ := $(CURDIR)/$(BUILD)/paint-smoke.o
@@ -148,7 +151,7 @@ NYBLER_LINK_TINT = -Wl,--start-group $(NYBLER_TINT_LIBS) $(NYBLER_ABSL_LIBS) -Wl
 NYBLER_LINK_TREX = -Wl,--start-group $(PREFIX)/lib/libtrex.a $(PREFIX)/lib/libfreetype.a $(PREFIX)/lib/libharfbuzz.a -Wl,--end-group
 endif
 
-.PHONY: all deps lexbor tint glslang mesa trex nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke text-smoke check clean
+.PHONY: all deps lexbor tint glslang mesa trex nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke check clean
 
 all: deps nybler
 
@@ -321,6 +324,16 @@ shader-smoke: nybler lexbor
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(SHADER_SMOKE_BIN)
 
+bind-group-smoke: nybler lexbor
+	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
+	$(NYBLER_CC) -std=c11 \
+		-I$(CURDIR)/include \
+		-c -o $(BIND_GROUP_SMOKE_OBJ) $(CURDIR)/tests/bind_group_smoke.c
+	$(NYBLER_CXX) $(NYBLER_CXX_LINK_FLAGS) \
+		-o $(BIND_GROUP_SMOKE_BIN) $(BIND_GROUP_SMOKE_OBJ) \
+		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
+	$(NYBLER_PATH_ENV) $(BIND_GROUP_SMOKE_BIN)
+
 resources-smoke: nybler lexbor
 	$(CMAKE) -E make_directory $(CURDIR)/$(BUILD)
 	$(NYBLER_CC) -std=c11 \
@@ -361,7 +374,7 @@ text-smoke: nybler lexbor trex
 		$(NYBLER_LIB) $(LEXBOR_LIB) $(NYBLER_LINK_TINT) $(NYBLER_LINK_TREX)
 	$(NYBLER_PATH_ENV) $(TEXT_SMOKE_BIN) "$(TREX_SRC)/examples/fonts/Roboto-Regular.ttf"
 
-check: nybler dom-smoke layout-smoke shader-smoke resources-smoke mesa-smoke paint-smoke text-smoke
+check: nybler dom-smoke layout-smoke shader-smoke bind-group-smoke resources-smoke mesa-smoke paint-smoke text-smoke
 	@echo "NybleR C API version: $$($(CMAKE) -P $(CURDIR)/cmake/print-version.cmake 2>/dev/null || echo unversioned)"
 
 clean:

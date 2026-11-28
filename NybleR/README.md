@@ -67,11 +67,12 @@ Targets:
 - `dom-smoke` — public `nybler_*` DOM API smoke test: `<h1> hello world </h1>` → `hello world`
 - `layout-smoke` — inline style, block boxes, text runs, and display-list smoke test
 - `shader-smoke` — instance/adapter/device lifecycle and full WGSL → SPIR-V/GLSL compile smoke test
+- `bind-group-smoke` — uniform-buffer, deterministic sampler, and sampled-texture binding with pixel readback across two submissions
 - `resources-smoke` — buffers, textures, samplers, bind groups, pipelines, render passes, command buffers, and queue submission smoke test
 - `mesa-smoke` — local Mesa clear, triangle draw, texture-to-buffer copy, and pixel readback smoke test
 - `paint-smoke` — DOM → layout → display list → colored quads → GPU readback smoke test
 - `text-smoke` — DOM → layout → display list → Trex glyph atlas → GPU readback smoke test
-- `check` — run all seven smoke tests
+- `check` — run all eight smoke tests
 - `all` — `deps` plus `nybler`
 - `clean` — remove local build outputs
 
@@ -97,10 +98,24 @@ requires LLVM. `AUTO` uses Mesa GL when EGL/GLES initialization succeeds and
 falls back to the null backend otherwise; explicit Mesa GL fails with
 `NYBLER_ERROR_BACKEND_UNAVAILABLE`.
 
-The Mesa backend resolves `libEGL`/`libGLESv2` entry points at runtime, so the
-stable `nybler_*` ABI does not link against a Mesa build. Consumers must make
-the locally built DLLs in `NybleR/build/local/bin` discoverable (for example via
-`PATH` on Windows). `make -C NybleR check` sets this path for every smoke test.
+The Mesa backend resolves `libEGL`/`libGLESv2` entry points at runtime through
+the small internal loader in `src/backend_loader.c`, so the stable `nybler_*`
+ABI does not link against a Mesa build. Consumers must make the locally built
+DLLs in `NybleR/build/local/bin` discoverable (for example via `PATH` on
+Windows). `make -C NybleR check` sets this path for every smoke test. The POSIX
+CI job compiles that same loader into a mock-library smoke test, so CI exercises
+the real `dlopen`/`dlsym` path without needing a GPU driver.
+
+Bind groups work beyond the text renderer: the Mesa backend reads uniform blocks
+from each pipeline's generated GLSL, assigns them to WebGPU binding numbers with
+`glUniformBlockBinding`, and uploads the matching bound buffers to those binding
+points. Tint names combined texture/sampler uniforms as
+`nybler_sampler_<texture-binding>_<sampler-binding>`, so the backend resolves the
+right sampled texture by binding number instead of entry order. GLSL ES 300 does
+not allow `layout(binding = N)` on buffers or samplers, so the shader bridge
+strips it and keeps the number in a generated `// nybler_binding N` annotation.
+Storage buffers need GLES 3.1 shader storage blocks; on the local GLES 3.0
+backend they are reported as a normal backend capability rejection.
 
 `nybler_command_encoder_copy_texture_to_buffer()` records a WebGPU-shaped
 texture readback into a `NYBLER_BUFFER_USAGE_COPY_DST` buffer. `bytes_per_row`

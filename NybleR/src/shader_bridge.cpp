@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "src/tint/api/tint.h"
+#include "src/tint/lang/glsl/writer/common/options.h"
 #include "src/tint/lang/glsl/writer/writer.h"
 #include "src/tint/lang/spirv/writer/writer.h"
 #include "src/tint/lang/wgsl/ast/transform/manager.h"
@@ -161,6 +162,76 @@ void ReplaceIdentifier(
   }
 }
 
+/* GLSL ES 300 does not allow `layout(binding = N)` on buffers or samplers;
+ * those bindings are set through GL binding points instead. Keep the number in
+ * a trailing comment so the Mesa backend can still recover it, then remove the
+ * qualifier from the source handed to the GLSL compiler. */
+std::string StripLayoutBindings(const std::string &source) {
+  std::string result;
+  size_t offset = 0;
+
+  while (offset <= source.size()) {
+    size_t end = source.find('\n', offset);
+    std::string line = end == std::string::npos
+      ? source.substr(offset)
+      : source.substr(offset, end - offset);
+    size_t layout = line.find("layout(");
+
+    if (layout != std::string::npos) {
+      size_t close = line.find(')', layout);
+      if (close != std::string::npos) {
+        std::string inside = line.substr(layout + 7, close - (layout + 7));
+        size_t token_offset = 0;
+        std::string rebuilt;
+        uint32_t binding = 0;
+        bool found = false;
+
+        for (;;) {
+          size_t comma = inside.find(',', token_offset);
+          std::string token = comma == std::string::npos
+            ? inside.substr(token_offset)
+            : inside.substr(token_offset, comma - token_offset);
+          size_t first = token.find_first_not_of(" \t");
+          size_t last = token.find_last_not_of(" \t");
+
+          if (first != std::string::npos) {
+            std::string trimmed = token.substr(first, last - first + 1);
+            if (trimmed.compare(0, 7, "binding") == 0 &&
+                (trimmed.size() == 7 || !IsIdentifierChar(trimmed[7]))) {
+              size_t equal = trimmed.find('=');
+              char *parse_end = NULL;
+              unsigned long value = equal == std::string::npos
+                ? 0
+                : std::strtoul(trimmed.c_str() + equal + 1, &parse_end, 10);
+              if (equal != std::string::npos &&
+                  parse_end != trimmed.c_str() + equal + 1) {
+                binding = static_cast<uint32_t>(value);
+                found = true;
+              }
+            } else {
+              if (!rebuilt.empty()) rebuilt += ", ";
+              rebuilt += trimmed;
+            }
+          }
+          if (comma == std::string::npos) break;
+          token_offset = comma + 1;
+        }
+
+        if (found) {
+          line.replace(layout + 7, close - (layout + 7), rebuilt);
+          line += " // nybler_binding " + std::to_string(binding);
+        }
+      }
+    }
+
+    result += line;
+    if (end == std::string::npos) break;
+    result += '\n';
+    offset = end + 1;
+  }
+  return result;
+}
+
 /* GLSL ES 300 allows explicit locations on vertex inputs and fragment outputs,
  * but rejects them on inter-stage variables. Tint also gives the two stages
  * different generated names for the same varying, so canonicalize the names by
@@ -281,6 +352,36 @@ NyblerResult TranslateGlsl(
         tint::BindingPoint{bindings[i].group, bindings[i].binding},
         tint::BindingPoint{0, bindings[i].glsl_binding});
     }
+
+    /* Name every combined texture/sampler pair from its WebGPU bindings. The
+     * Mesa backend parses these names so it can bind the right texture rather
+     * than relying on bind-group entry order. */
+    tint::glsl::writer::CombinedTextureSamplerInfo combined;
+    for (size_t texture = 0; texture < binding_count; ++texture) {
+      if (bindings[texture].type != NYBLER_BINDING_TYPE_TEXTURE &&
+          bindings[texture].type != NYBLER_BINDING_TYPE_STORAGE_TEXTURE) {
+        continue;
+      }
+      for (size_t sampler = 0; sampler < binding_count; ++sampler) {
+        if (bindings[sampler].type != NYBLER_BINDING_TYPE_SAMPLER &&
+            bindings[sampler].type != NYBLER_BINDING_TYPE_COMPARISON_SAMPLER) {
+          continue;
+        }
+        std::string name = "nybler_sampler_" +
+          std::to_string(bindings[texture].binding) + "_" +
+          std::to_string(bindings[sampler].binding);
+        combined.emplace(
+          tint::glsl::writer::binding::CombinedTextureSamplerPair{
+            tint::BindingPoint{bindings[texture].group, bindings[texture].binding},
+            tint::BindingPoint{bindings[sampler].group, bindings[sampler].binding}},
+          name);
+      }
+    }
+    if (!combined.empty()) {
+      glsl_options.combined_samplers_info =
+        tint::glsl::writer::CombineSamplersInfo(
+          std::move(combined), tint::BindingPoint{0, 0xffffffffu});
+    }
   }
 
   /* The IR GLSL printer in this Tint snapshot is incomplete; the AST path is
@@ -291,7 +392,7 @@ NyblerResult TranslateGlsl(
     SetError(out_error, output.Failure().reason.Str());
     return NYBLER_ERROR_INVALID_ARGUMENT;
   }
-  std::string glsl = NormalizeGlsl(output->glsl, stage);
+  std::string glsl = StripLayoutBindings(NormalizeGlsl(output->glsl, stage));
   /* Mesa consumes GLSL as a C string; keep the reported size exact while
    * storing a terminating byte that is not part of the shader source. */
   uint8_t *code = static_cast<uint8_t *>(malloc(glsl.size() + 1));

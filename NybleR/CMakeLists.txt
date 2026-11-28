@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(nybler VERSION 0.1.0 LANGUAGES C CXX)
 
 set(NYBLER_SOURCES
+  src/backend_loader.c
   src/document.c
   src/layout.c
   src/instance.c

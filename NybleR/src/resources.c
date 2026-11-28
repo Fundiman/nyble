@@ -429,6 +429,7 @@ static NyblerResult nybler_pipeline_translate_glsl(NyblerRenderPipeline *pipelin
         bindings[i].group = 0;
         bindings[i].binding = pipeline->layout->entries[i].binding;
         bindings[i].glsl_binding = pipeline->layout->entries[i].binding;
+        bindings[i].type = pipeline->layout->entries[i].binding_type;
       }
     }
   }

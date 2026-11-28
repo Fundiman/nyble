@@ -1,17 +1,13 @@
 #include "mesa_backend.h"
+#include "backend_loader.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#if !defined(_WIN64)
+#if defined(_WIN32) && !defined(_WIN64)
 #define NYBLER_APIENTRY __stdcall
-#endif
-#else
-#include <dlfcn.h>
 #endif
 
 #ifndef NYBLER_APIENTRY
@@ -73,6 +69,9 @@ typedef ptrdiff_t NyblerGLsizeiptr;
 #define NYBLER_GL_COMPILE_STATUS 0x8B81
 #define NYBLER_GL_LINK_STATUS 0x8B82
 #define NYBLER_GL_TEXTURE0 0x84C0
+#define NYBLER_GL_UNIFORM_BUFFER 0x8A11
+#define NYBLER_GL_SHADER_STORAGE_BUFFER 0x90EC
+#define NYBLER_GL_INVALID_INDEX 0xFFFFFFFFu
 
 typedef NyblerEGLBoolean(NYBLER_APIENTRY *NyblerEGLInitializeFn)(
   NyblerEGLDisplay display,
@@ -288,6 +287,20 @@ typedef void(NYBLER_APIENTRY *NyblerGLUniform1iFn)(
   NyblerGLint location,
   NyblerGLint value
 );
+typedef NyblerGLuint(NYBLER_APIENTRY *NyblerGLGetUniformBlockIndexFn)(
+  NyblerGLuint program,
+  const char *name
+);
+typedef void(NYBLER_APIENTRY *NyblerGLUniformBlockBindingFn)(
+  NyblerGLuint program,
+  NyblerGLuint block_index,
+  NyblerGLuint binding
+);
+typedef void(NYBLER_APIENTRY *NyblerGLBindBufferBaseFn)(
+  NyblerGLenum target,
+  NyblerGLuint index,
+  NyblerGLuint buffer
+);
 
 struct NyblerMesaContext {
   void *egl_library;
@@ -348,6 +361,9 @@ struct NyblerMesaContext {
   NyblerGLActiveTextureFn gl_active_texture;
   NyblerGLGetUniformLocationFn gl_get_uniform_location;
   NyblerGLUniform1iFn gl_uniform_1i;
+  NyblerGLGetUniformBlockIndexFn gl_get_uniform_block_index;
+  NyblerGLUniformBlockBindingFn gl_uniform_block_binding;
+  NyblerGLBindBufferBaseFn gl_bind_buffer_base;
 };
 
 typedef struct NyblerMesaTexture {
@@ -357,45 +373,30 @@ typedef struct NyblerMesaTexture {
   NyblerGLint height;
 } NyblerMesaTexture;
 
+typedef enum NyblerMesaBlockKind {
+  NYBLER_MESA_BLOCK_UNIFORM = 0,
+  NYBLER_MESA_BLOCK_STORAGE
+} NyblerMesaBlockKind;
+
+typedef struct NyblerMesaBinding {
+  char *name;
+  uint32_t binding;
+  NyblerMesaBlockKind kind;
+} NyblerMesaBinding;
+
+typedef struct NyblerMesaSampler {
+  char *name;
+  uint32_t texture_binding;
+} NyblerMesaSampler;
+
 typedef struct NyblerMesaPipeline {
   NyblerGLuint program;
-  /* Combined sampler uniforms found in the pipeline's generated GLSL. */
-  char **sampler_uniforms;
+  /* Uniform/storage blocks and combined samplers found in the generated GLSL. */
+  NyblerMesaBinding *blocks;
+  size_t block_count;
+  NyblerMesaSampler *samplers;
   size_t sampler_count;
 } NyblerMesaPipeline;
-
-static void *nybler_load_library(const char *const *names) {
-  size_t i;
-
-  for (i = 0; names[i]; ++i) {
-#if defined(_WIN32)
-    HMODULE library = LoadLibraryA(names[i]);
-    if (library) return (void *)library;
-#else
-    void *library = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
-    if (library) return library;
-#endif
-  }
-  return NULL;
-}
-
-static void nybler_unload_library(void *library) {
-  if (!library) return;
-#if defined(_WIN32)
-  FreeLibrary((HMODULE)library);
-#else
-  dlclose(library);
-#endif
-}
-
-static void *nybler_load_symbol(void *library, const char *name) {
-  if (!library) return NULL;
-#if defined(_WIN32)
-  return (void *)GetProcAddress((HMODULE)library, name);
-#else
-  return dlsym(library, name);
-#endif
-}
 
 /* The loader macros build type names from the exported symbol name. */
 #define NyblerEGLeglInitializeFn NyblerEGLInitializeFn
@@ -449,6 +450,9 @@ static void *nybler_load_symbol(void *library, const char *name) {
 #define NyblerGLglActiveTextureFn NyblerGLActiveTextureFn
 #define NyblerGLglGetUniformLocationFn NyblerGLGetUniformLocationFn
 #define NyblerGLglUniform1iFn NyblerGLUniform1iFn
+#define NyblerGLglGetUniformBlockIndexFn NyblerGLGetUniformBlockIndexFn
+#define NyblerGLglUniformBlockBindingFn NyblerGLUniformBlockBindingFn
+#define NyblerGLglBindBufferBaseFn NyblerGLBindBufferBaseFn
 
 #define NYBLER_LOAD_EGL(context, field, name) \
   do { \
@@ -566,6 +570,9 @@ NyblerResult nybler_mesa_init(NyblerMesaContext **out_context) {
   NYBLER_LOAD_GLES(context, gl_active_texture, glActiveTexture);
   NYBLER_LOAD_GLES(context, gl_get_uniform_location, glGetUniformLocation);
   NYBLER_LOAD_GLES(context, gl_uniform_1i, glUniform1i);
+  NYBLER_LOAD_GLES(context, gl_get_uniform_block_index, glGetUniformBlockIndex);
+  NYBLER_LOAD_GLES(context, gl_uniform_block_binding, glUniformBlockBinding);
+  NYBLER_LOAD_GLES(context, gl_bind_buffer_base, glBindBufferBase);
 
   get_platform_display = (NyblerEGLGetPlatformDisplayFn)
     nybler_load_symbol(
@@ -783,22 +790,191 @@ static NyblerGLuint nybler_compile_shader(
   return shader;
 }
 
-/* Tint combines each texture/sampler pair into a single GLSL sampler uniform.
- * Collect those names from the generated source so the backend can bind the
- * textures supplied by a bind group without hardcoding uniform names. */
+#define NYBLER_MESA_NO_BINDING 0xffffffffu
+
+static int nybler_is_name_char(char value) {
+  return (value >= 'a' && value <= 'z') ||
+    (value >= 'A' && value <= 'Z') ||
+    (value >= '0' && value <= '9') ||
+    value == '_';
+}
+
+static int nybler_token_at(const char *text, size_t offset, size_t size, const char *token) {
+  size_t length = strlen(token);
+
+  if (offset + length > size) return 0;
+  if (memcmp(text + offset, token, length) != 0) return 0;
+  return offset + length == size || !nybler_is_name_char(text[offset + length]);
+}
+
+static uint32_t nybler_layout_binding(const char *line, size_t size) {
+  size_t offset = 0;
+  char *end = NULL;
+  unsigned long value;
+
+  while (offset + 7 <= size) {
+    if (memcmp(line + offset, "binding", 7) == 0 &&
+        (offset + 7 == size || !nybler_is_name_char(line[offset + 7]))) {
+      break;
+    }
+    ++offset;
+  }
+  if (offset + 7 > size) return NYBLER_MESA_NO_BINDING;
+  offset += 7;
+  while (offset < size && line[offset] != '=') ++offset;
+  if (offset == size) return NYBLER_MESA_NO_BINDING;
+  ++offset;
+  value = strtoul(line + offset, &end, 10);
+  if (end == line + offset || value > 0xfffffffful) return NYBLER_MESA_NO_BINDING;
+  return (uint32_t)value;
+}
+
+/* GLSL ES 300 cannot carry a `binding` layout qualifier, so shader_bridge
+ * appends `// nybler_binding N` to the declaration instead. */
+static uint32_t nybler_annotation_binding(const char *line, size_t size) {
+  static const char token[] = "nybler_binding";
+  size_t offset = 0;
+  char *end = NULL;
+  unsigned long value;
+
+  while (offset + sizeof(token) - 1 <= size) {
+    if (memcmp(line + offset, token, sizeof(token) - 1) == 0 &&
+        (offset + sizeof(token) - 1 == size ||
+         !nybler_is_name_char(line[offset + sizeof(token) - 1]))) {
+      break;
+    }
+    ++offset;
+  }
+  if (offset + sizeof(token) - 1 > size) return NYBLER_MESA_NO_BINDING;
+  offset += sizeof(token) - 1;
+  while (offset < size && (line[offset] == ' ' || line[offset] == '\t')) ++offset;
+  value = strtoul(line + offset, &end, 10);
+  if (end == line + offset || value > 0xfffffffful) return NYBLER_MESA_NO_BINDING;
+  return (uint32_t)value;
+}
+
+static char *nybler_copy_name(const char *text, size_t length) {
+  char *copy = (char *)malloc(length + 1);
+  if (!copy) return NULL;
+  memcpy(copy, text, length);
+  copy[length] = '\0';
+  return copy;
+}
+
+static void nybler_add_block(
+  NyblerMesaBinding **blocks,
+  size_t *count,
+  const char *name,
+  size_t length,
+  uint32_t binding,
+  NyblerMesaBlockKind kind
+) {
+  size_t i;
+
+  if (binding == NYBLER_MESA_NO_BINDING) return;
+  for (i = 0; i < *count; ++i) {
+    if ((*blocks)[i].binding == binding && (*blocks)[i].kind == kind) return;
+  }
+  NyblerMesaBinding *grown = (NyblerMesaBinding *)realloc(
+    *blocks, (*count + 1) * sizeof(*grown));
+  if (!grown) return;
+  grown[*count].name = nybler_copy_name(name, length);
+  if (!grown[*count].name) {
+    *blocks = grown;
+    return;
+  }
+  grown[*count].binding = binding;
+  grown[*count].kind = kind;
+  *blocks = grown;
+  ++*count;
+}
+
+static size_t nybler_find_token(
+  const char *text,
+  size_t begin,
+  size_t end,
+  const char *token
+) {
+  size_t offset = begin;
+
+  while (offset < end) {
+    if (nybler_token_at(text, offset, end, token)) return offset;
+    ++offset;
+  }
+  return end;
+}
+
+/* Tint emits `layout(std140) uniform <block> { ... }` and
+ * `layout(std430) [readonly] buffer <block> { ... }`, each followed by a
+ * `// nybler_binding N` annotation. Record the block name, kind and flat
+ * binding so the backend can point it at a WebGPU buffer. */
+static void nybler_collect_blocks(
+  const char *glsl,
+  size_t size,
+  NyblerMesaBinding **blocks,
+  size_t *count
+) {
+  size_t offset = 0;
+
+  while (offset < size) {
+    size_t end = offset;
+    size_t uniform;
+    size_t buffer;
+    size_t declaration;
+    size_t start;
+    size_t name_end;
+    uint32_t binding;
+    NyblerMesaBlockKind kind;
+
+    while (end < size && glsl[end] != '\n') ++end;
+    if (nybler_token_at(glsl, offset, end, "layout")) {
+      binding = nybler_annotation_binding(glsl + offset, end - offset);
+      if (binding == NYBLER_MESA_NO_BINDING) {
+        binding = nybler_layout_binding(glsl + offset, end - offset);
+      }
+      uniform = nybler_find_token(glsl, offset, end, "uniform");
+      buffer = nybler_find_token(glsl, offset, end, "buffer");
+      declaration = uniform < buffer ? uniform : buffer;
+      kind = declaration == uniform
+        ? NYBLER_MESA_BLOCK_UNIFORM
+        : NYBLER_MESA_BLOCK_STORAGE;
+      if (declaration < end && binding != NYBLER_MESA_NO_BINDING) {
+        start = declaration + (kind == NYBLER_MESA_BLOCK_UNIFORM ? 7 : 6);
+        while (start < end && glsl[start] == ' ') ++start;
+        name_end = start;
+        while (name_end < end && nybler_is_name_char(glsl[name_end])) ++name_end;
+        if (name_end > start) {
+          size_t brace = name_end;
+          while (brace < end && glsl[brace] == ' ') ++brace;
+          if (brace < end && glsl[brace] == '{') {
+            nybler_add_block(
+              blocks, count, glsl + start, name_end - start, binding, kind);
+          }
+        }
+      }
+    }
+    offset = end < size ? end + 1 : end;
+  }
+}
+
+/* Tint combines each texture/sampler pair into one sampler uniform. The shader
+ * bridge names it nybler_sampler_<texture-binding>_<sampler-binding>, so the
+ * backend can recover the texture binding without relying on entry order. */
 static void nybler_collect_sampler_uniforms(
   const char *glsl,
   size_t size,
-  char ***names,
+  NyblerMesaSampler **samplers,
   size_t *count
 ) {
   static const char sampler_token[] = "sampler2D";
+  static const char name_prefix[] = "nybler_sampler_";
   size_t offset = 0;
 
   while (offset + sizeof(sampler_token) - 1 <= size) {
     size_t start;
     size_t end;
     size_t i;
+    uint32_t texture_binding = NYBLER_MESA_NO_BINDING;
     int duplicate = 0;
 
     if (memcmp(glsl + offset, sampler_token, sizeof(sampler_token) - 1) != 0) {
@@ -808,33 +984,35 @@ static void nybler_collect_sampler_uniforms(
     start = offset + sizeof(sampler_token) - 1;
     while (start < size && (glsl[start] == ' ' || glsl[start] == '\t')) ++start;
     end = start;
-    while (end < size && (
-      (glsl[end] >= 'a' && glsl[end] <= 'z') ||
-      (glsl[end] >= 'A' && glsl[end] <= 'Z') ||
-      (glsl[end] >= '0' && glsl[end] <= '9') ||
-      glsl[end] == '_')) {
-      ++end;
-    }
+    while (end < size && nybler_is_name_char(glsl[end])) ++end;
     if (end == start) {
       offset = start;
       continue;
     }
+    if (end - start > sizeof(name_prefix) - 1 &&
+        memcmp(glsl + start, name_prefix, sizeof(name_prefix) - 1) == 0) {
+      char *parse_end = NULL;
+      unsigned long value = strtoul(glsl + start + sizeof(name_prefix) - 1, &parse_end, 10);
+      if (parse_end != glsl + start + sizeof(name_prefix) - 1 &&
+          *parse_end == '_' && value <= 0xfffffffful) {
+        texture_binding = (uint32_t)value;
+      }
+    }
     for (i = 0; i < *count; ++i) {
-      if (strlen((*names)[i]) == end - start &&
-          memcmp((*names)[i], glsl + start, end - start) == 0) {
+      if (strlen((*samplers)[i].name) == end - start &&
+          memcmp((*samplers)[i].name, glsl + start, end - start) == 0) {
         duplicate = 1;
         break;
       }
     }
     if (!duplicate) {
-      char **grown = (char **)realloc(*names, (*count + 1) * sizeof(*grown));
+      NyblerMesaSampler *grown = (NyblerMesaSampler *)realloc(
+        *samplers, (*count + 1) * sizeof(*grown));
       if (grown) {
-        char *name = (char *)malloc(end - start + 1);
-        if (name) {
-          memcpy(name, glsl + start, end - start);
-          name[end - start] = '\0';
-          grown[*count] = name;
-          *names = grown;
+        grown[*count].name = nybler_copy_name(glsl + start, end - start);
+        if (grown[*count].name) {
+          grown[*count].texture_binding = texture_binding;
+          *samplers = grown;
           ++*count;
         }
       }
@@ -843,11 +1021,18 @@ static void nybler_collect_sampler_uniforms(
   }
 }
 
-static void nybler_mesa_pipeline_release_samplers(NyblerMesaPipeline *state) {
+static void nybler_mesa_pipeline_release_bindings(NyblerMesaPipeline *state) {
   size_t i;
-  for (i = 0; i < state->sampler_count; ++i) free(state->sampler_uniforms[i]);
-  free(state->sampler_uniforms);
-  state->sampler_uniforms = NULL;
+
+  for (i = 0; i < state->block_count; ++i) {
+    free(state->blocks[i].name);
+  }
+  free(state->blocks);
+  state->blocks = NULL;
+  state->block_count = 0;
+  for (i = 0; i < state->sampler_count; ++i) free(state->samplers[i].name);
+  free(state->samplers);
+  state->samplers = NULL;
   state->sampler_count = 0;
 }
 
@@ -855,10 +1040,12 @@ NyblerResult nybler_mesa_create_pipeline(
   NyblerMesaContext *context,
   NyblerRenderPipeline *pipeline
 ) {
-  NyblerMesaPipeline *state;
+  NyblerMesaPipeline *state = NULL;
   NyblerGLuint vertex_shader = 0;
   NyblerGLuint fragment_shader = 0;
   NyblerGLint linked = 0;
+  NyblerResult result = NYBLER_ERROR_UNSUPPORTED;
+  size_t i;
   char log[1024];
 
   if (!pipeline) return NYBLER_ERROR_INVALID_ARGUMENT;
@@ -882,10 +1069,7 @@ NyblerResult nybler_mesa_create_pipeline(
   state = (NyblerMesaPipeline *)calloc(1, sizeof(*state));
   if (!state) goto fail;
   state->program = context->gl_create_program();
-  if (!state->program) {
-    free(state);
-    goto fail;
-  }
+  if (!state->program) goto fail;
   context->gl_attach_shader(state->program, vertex_shader);
   context->gl_attach_shader(state->program, fragment_shader);
   context->gl_link_program(state->program);
@@ -895,17 +1079,37 @@ NyblerResult nybler_mesa_create_pipeline(
     context->gl_get_program_info_log(
       state->program, (NyblerGLsizei)sizeof(log), NULL, log);
     fprintf(stderr, "nybler mesa pipeline link failed: %s\n", log);
-    context->gl_delete_program(state->program);
-    free(state);
     goto fail;
   }
 
+  nybler_collect_blocks(
+    pipeline->vertex_glsl, pipeline->vertex_glsl_size,
+    &state->blocks, &state->block_count);
+  nybler_collect_blocks(
+    pipeline->fragment_glsl, pipeline->fragment_glsl_size,
+    &state->blocks, &state->block_count);
   nybler_collect_sampler_uniforms(
     pipeline->vertex_glsl, pipeline->vertex_glsl_size,
-    &state->sampler_uniforms, &state->sampler_count);
+    &state->samplers, &state->sampler_count);
   nybler_collect_sampler_uniforms(
     pipeline->fragment_glsl, pipeline->fragment_glsl_size,
-    &state->sampler_uniforms, &state->sampler_count);
+    &state->samplers, &state->sampler_count);
+
+  if (state->block_count && !context->gl_bind_buffer_base) goto fail;
+  for (i = 0; i < state->block_count; ++i) {
+    NyblerGLuint index;
+
+    if (state->blocks[i].kind != NYBLER_MESA_BLOCK_UNIFORM) continue;
+    if (!context->gl_get_uniform_block_index ||
+        !context->gl_uniform_block_binding) {
+      goto fail;
+    }
+    index = context->gl_get_uniform_block_index(
+      state->program, state->blocks[i].name);
+    if (index == NYBLER_GL_INVALID_INDEX) continue;
+    context->gl_uniform_block_binding(
+      state->program, index, state->blocks[i].binding);
+  }
 
   context->gl_delete_shader(vertex_shader);
   context->gl_delete_shader(fragment_shader);
@@ -913,9 +1117,14 @@ NyblerResult nybler_mesa_create_pipeline(
   return NYBLER_OK;
 
 fail:
+  if (state) {
+    if (state->program) context->gl_delete_program(state->program);
+    nybler_mesa_pipeline_release_bindings(state);
+    free(state);
+  }
   if (vertex_shader) context->gl_delete_shader(vertex_shader);
   if (fragment_shader) context->gl_delete_shader(fragment_shader);
-  return NYBLER_ERROR_UNSUPPORTED;
+  return result;
 }
 
 void nybler_mesa_destroy_pipeline(NyblerRenderPipeline *pipeline) {
@@ -930,7 +1139,7 @@ void nybler_mesa_destroy_pipeline(NyblerRenderPipeline *pipeline) {
   if (context && nybler_mesa_make_current(context)) {
     context->gl_delete_program(state->program);
   }
-  nybler_mesa_pipeline_release_samplers(state);
+  nybler_mesa_pipeline_release_bindings(state);
   free(state);
   pipeline->backend = NULL;
 }
@@ -1011,6 +1220,21 @@ static NyblerResult nybler_mesa_copy_texture_to_buffer(
   }
   context->gl_bind_framebuffer(NYBLER_GL_FRAMEBUFFER, 0);
   return NYBLER_OK;
+}
+
+static const NyblerBindGroupEntryStorage *nybler_find_bind_entry(
+  const NyblerBindGroup *group,
+  uint32_t binding,
+  NyblerBindingType type
+) {
+  size_t i;
+
+  if (!group) return NULL;
+  for (i = 0; i < group->entry_count; ++i) {
+    const NyblerBindGroupEntryStorage *entry = &group->entries[i];
+    if (entry->binding == binding && entry->binding_type == type) return entry;
+  }
+  return NULL;
 }
 
 NyblerResult nybler_mesa_execute(
@@ -1095,6 +1319,8 @@ NyblerResult nybler_mesa_execute(
       case NYBLER_COMMAND_DRAW: {
         NyblerMesaPipeline *state;
         NyblerGLuint vbo = 0;
+        NyblerGLuint block_buffers[16];
+        size_t block_buffer_count = 0;
         NyblerGLuint bound_locations[8];
         size_t bound_count = 0;
         uint64_t stride;
@@ -1136,38 +1362,117 @@ NyblerResult nybler_mesa_execute(
         context->gl_use_program(state->program);
         if (state->sampler_count) {
           NyblerGLenum texture_unit = 0;
-          size_t binding_index;
+          size_t fallback_texture = 0;
+          size_t sampler_index;
 
           if (!bind_group || !context->gl_active_texture ||
               !context->gl_get_uniform_location || !context->gl_uniform_1i) {
             result = NYBLER_ERROR_UNSUPPORTED;
             goto done;
           }
-          for (binding_index = 0;
-               binding_index < bind_group->entry_count &&
-               texture_unit < state->sampler_count;
-               ++binding_index) {
-            const NyblerBindGroupEntryStorage *entry =
-              &bind_group->entries[binding_index];
+          for (sampler_index = 0; sampler_index < state->sampler_count;
+               ++sampler_index) {
+            const NyblerMesaSampler *sampler = &state->samplers[sampler_index];
+            const NyblerBindGroupEntryStorage *entry = NULL;
             NyblerMesaTexture *sampled;
+            size_t binding_index;
+            size_t texture_ordinal = 0;
 
-            if (entry->binding_type != NYBLER_BINDING_TYPE_TEXTURE ||
-                !entry->texture) {
-              continue;
+            if (sampler->texture_binding != NYBLER_MESA_NO_BINDING) {
+              entry = nybler_find_bind_entry(
+                bind_group, sampler->texture_binding,
+                NYBLER_BINDING_TYPE_TEXTURE);
+            } else {
+              for (binding_index = 0; binding_index < bind_group->entry_count;
+                   ++binding_index) {
+                const NyblerBindGroupEntryStorage *candidate =
+                  &bind_group->entries[binding_index];
+                if (candidate->binding_type != NYBLER_BINDING_TYPE_TEXTURE ||
+                    !candidate->texture) {
+                  continue;
+                }
+                if (texture_ordinal++ == fallback_texture) {
+                  entry = candidate;
+                  break;
+                }
+              }
+              ++fallback_texture;
             }
+            if (!entry || !entry->texture) continue;
             sampled = (NyblerMesaTexture *)entry->texture->backend;
-            if (!sampled) continue;
+            if (!sampled || texture_unit >= 16) {
+              result = NYBLER_ERROR_UNSUPPORTED;
+              goto done;
+            }
             context->gl_active_texture(NYBLER_GL_TEXTURE0 + texture_unit);
             context->gl_bind_texture(NYBLER_GL_TEXTURE_2D, sampled->texture);
             context->gl_uniform_1i(
-              context->gl_get_uniform_location(
-                state->program, state->sampler_uniforms[texture_unit]),
+              context->gl_get_uniform_location(state->program, sampler->name),
               (NyblerGLint)texture_unit);
             ++texture_unit;
           }
           if (texture_unit == 0) {
             result = NYBLER_ERROR_UNSUPPORTED;
             goto done;
+          }
+        }
+
+        /* Upload each bound uniform/storage buffer to the flat binding Tint
+         * assigned in the generated program. Buffers stay alive past the draw. */
+        if (state->block_count) {
+          size_t block_index;
+
+          if (!bind_group || !context->gl_bind_buffer_base) {
+            result = NYBLER_ERROR_UNSUPPORTED;
+            goto done;
+          }
+          for (block_index = 0; block_index < state->block_count;
+               ++block_index) {
+            const NyblerMesaBinding *block = &state->blocks[block_index];
+            const NyblerBindGroupEntryStorage *entry;
+            NyblerGLenum target;
+            NyblerGLuint buffer = 0;
+
+            if (block->kind == NYBLER_MESA_BLOCK_UNIFORM) {
+              entry = nybler_find_bind_entry(
+                bind_group, block->binding,
+                NYBLER_BINDING_TYPE_UNIFORM_BUFFER);
+              target = NYBLER_GL_UNIFORM_BUFFER;
+            } else {
+              entry = nybler_find_bind_entry(
+                bind_group, block->binding,
+                NYBLER_BINDING_TYPE_STORAGE_BUFFER);
+              if (!entry) {
+                entry = nybler_find_bind_entry(
+                  bind_group, block->binding,
+                  NYBLER_BINDING_TYPE_READ_ONLY_STORAGE_BUFFER);
+              }
+              target = NYBLER_GL_SHADER_STORAGE_BUFFER;
+            }
+            if (!entry || !entry->buffer) {
+              result = NYBLER_ERROR_UNSUPPORTED;
+              goto done;
+            }
+            if (block_buffer_count >= 16 ||
+                entry->offset > entry->buffer->size ||
+                entry->size > entry->buffer->size - entry->offset ||
+                entry->size == 0) {
+              result = NYBLER_ERROR_INVALID_ARGUMENT;
+              goto done;
+            }
+            context->gl_gen_buffers(1, &buffer);
+            if (!buffer) {
+              result = NYBLER_ERROR_OUT_OF_MEMORY;
+              goto done;
+            }
+            context->gl_bind_buffer(target, buffer);
+            context->gl_buffer_data(
+              target,
+              (NyblerGLsizeiptr)entry->size,
+              entry->buffer->data + entry->offset,
+              NYBLER_GL_STATIC_DRAW);
+            context->gl_bind_buffer_base(target, block->binding, buffer);
+            block_buffers[block_buffer_count++] = buffer;
           }
         }
         context->gl_gen_buffers(1, &vbo);
@@ -1210,6 +1515,10 @@ NyblerResult nybler_mesa_execute(
           context->gl_disable_vertex_attrib_array(bound_locations[attribute_index]);
         }
         context->gl_delete_buffers(1, &vbo);
+        if (block_buffer_count) {
+          context->gl_delete_buffers(
+            (NyblerGLsizei)block_buffer_count, block_buffers);
+        }
         break;
       }
 

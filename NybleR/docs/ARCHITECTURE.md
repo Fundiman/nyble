@@ -76,19 +76,26 @@ command encoder, and command buffers are consumed by `nybler_queue_submit()`.
 Command buffers record validated render-pass and texture-copy commands;
 submission executes them through the selected backend before consuming them.
 
-`src/mesa_backend.c` is the local Mesa GL implementation. It dynamically loads
-EGL and GLES entry points, creates an offscreen pbuffer/surfaceless context,
-backs WebGPU-style textures with GLES textures and framebuffer objects, and
-executes clear, draw, and copy commands. The public ABI does not link against
-Mesa, so Dawn/Mesa details stay private. `NYBLER_BACKEND_AUTO` falls back to the
-null backend when Mesa cannot initialize; explicit Mesa GL reports
-`NYBLER_ERROR_BACKEND_UNAVAILABLE`.
+`src/mesa_backend.c` is the local Mesa GL implementation. It resolves EGL and
+GLES entry points through `src/backend_loader.c`, creates an offscreen
+pbuffer/surfaceless context, backs WebGPU-style textures with GLES textures and
+framebuffer objects, and executes clear, draw, and copy commands. The public ABI
+does not link against Mesa, so Dawn/Mesa details stay private.
+`NYBLER_BACKEND_AUTO` falls back to the null backend when Mesa cannot initialize;
+explicit Mesa GL reports `NYBLER_ERROR_BACKEND_UNAVAILABLE`. Keeping the loader
+in its own source also lets POSIX CI compile the exact `dlopen`/`dlsym` path
+against a mock shared library.
 
-The Mesa draw path honors bind groups generically: it discovers the combined
-sampler uniforms emitted by Tint in the pipeline's generated GLSL, resolves the
-bound textures, and assigns them to successive texture units. No sampler name is
-hardcoded in the backend. The colored and textured programs are translations of
-their own WGSL modules and entry points, not fixed validation shaders.
+The Mesa draw path honors bind groups generically. It discovers uniform blocks in
+the pipeline's generated GLSL, assigns each block to the WebGPU binding number
+recorded by the shader bridge, and uploads the matching bound buffer to that
+binding point. Tint names combined texture/sampler uniforms deterministically as
+`nybler_sampler_<texture-binding>_<sampler-binding>`, so the backend resolves the
+sampled texture by binding number rather than bind-group entry order. No sampler
+name is hardcoded in the backend. The colored, textured, and bind-group smoke
+programs are translations of their own WGSL modules and entry points, not fixed
+validation shaders. GLES 3.0 has no shader storage blocks, so WGSL storage
+buffers remain a normal backend capability rejection on this backend.
 
 Dawn, SDL3 GPU, and raylib are not the public API. They are possible future
 implementation details behind this surface.
@@ -122,10 +129,13 @@ while the AST path is complete and is what the Tint CLI uses.
 Before handing GLSL to Mesa, the bridge runs Tint's `Renamer` transform for GLSL
 keywords, canonicalizes inter-stage variable names by `@location`, and drops
 explicit locations that GLSL ES 300 does not allow on fragment inputs or vertex
-outputs. Vertex input and fragment output locations are preserved. The Mesa
-backend compiles those exact strings and discovers sampler uniforms from the
-generated source. A raw SPIR-V module has no WGSL to translate and is rejected
-by the Mesa GL backend as a backend capability error.
+outputs. Vertex input and fragment output locations are preserved. GLES 3.0 also
+rejects `layout(binding = N)` on buffers and samplers, so the bridge removes that
+qualifier and records the number as a trailing `// nybler_binding N` annotation;
+binding is then set through GL binding points. The Mesa backend compiles those
+exact strings and discovers blocks and combined samplers from the generated
+source. A raw SPIR-V module has no WGSL to translate and is rejected by the Mesa
+GL backend as a backend capability error.
 
 Backend capability checks are not a WGSL subset parser. A shader may compile as
 full WGSL and still be rejected by a specific backend when it uses features that

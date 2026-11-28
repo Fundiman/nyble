@@ -7,8 +7,9 @@ name: nybler-posix
 # depot_tools/gclient sync plus local glslang + Mesa EGL/GLES software-driver
 # builds and the Trex/FreeType/HarfBuzz stack. Those are heavy renderer builds,
 # not portable source checks. This job builds the POSIX-portable Lexbor target,
-# compiles the real DOM/layout/instance/resource/paint C sources, and supplies
-# small stubs only for the Tint/Mesa/Trex bridges so the public C smoke tests
+# compiles the real DOM/layout/instance/resource/paint C sources, exercises the
+# real dlopen/dlsym backend loader with a mock shared library, and supplies
+# small stubs only for the Tint/Mesa GL/Trex bridges so the public C smoke tests
 # can be compiled and the deterministic non-GPU ones executed.
 
 on:
@@ -68,6 +69,17 @@ jobs:
           set -eu
 
           mkdir -p build/posix-ci
+
+          # Exercise the exact platform loader used for Mesa's EGL/GLES entry
+          # points. The mock exports one symbol; no driver is required.
+          $CC -std=c11 -fPIC -shared \
+            -o build/posix-ci/libnybler_backend_loader_mock.so \
+            tests/backend_loader_mock.c
+          $CC -std=c11 -Iinclude -Isrc -I"$PWD/build/local/include" \
+            -o build/posix-ci/backend_loader_smoke \
+            tests/backend_loader_smoke.c src/backend_loader.c -ldl
+          ./build/posix-ci/backend_loader_smoke \
+            "$PWD/build/posix-ci/libnybler_backend_loader_mock.so"
 
           # Only the renderer bridges are stubbed. The public API, DOM/CSSOM,
           # layout, instance lifecycle, resource validation, and paint C code
@@ -284,6 +296,7 @@ jobs:
           LEXBOR_LIB="$PREFIX/lib/liblexbor_static.a"
 
           SOURCES="
+            src/backend_loader.c
             src/version.c
             src/document.c
             src/layout.c
@@ -300,7 +313,7 @@ jobs:
             OBJECTS="$OBJECTS $object"
           done
 
-          for test in version dom layout shader resources mesa paint text; do
+          for test in version dom layout shader bind_group resources mesa paint text; do
             test_source="tests/${test}_smoke.c"
             if [ "$test" = "version" ]; then
               test_source="build/posix-ci/version_smoke.c"
@@ -312,9 +325,9 @@ jobs:
               "$LEXBOR_LIB" -lm -ldl -lpthread
           done
 
-          # Compile/link-only: resources/mesa/paint/text assert backend, pixel,
-          # or Trex glyph behavior that the stubs above intentionally do not
-          # reproduce. No font path or icon is supplied.
+          # Compile/link-only: bind_group/resources/mesa/paint/text assert
+          # backend, pixel, or Trex glyph behavior that the stubs above
+          # intentionally do not reproduce. No font path or icon is supplied.
           for test in version dom layout shader; do
             echo "== nybler ${test} smoke =="
             "./build/posix-ci/${test}_smoke"

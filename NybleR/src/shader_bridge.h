@@ -17,11 +17,13 @@ NyblerResult nybler_tint_compile(
   char **out_error
 );
 
-/* WGSL binding point -> flat GLSL binding number. */
+/* WGSL binding point -> flat GLSL binding number, plus the WebGPU binding
+ * type so Tint can name combined texture/sampler uniforms deterministically. */
 typedef struct NyblerGlslBinding {
   uint32_t group;
   uint32_t binding;
   uint32_t glsl_binding;
+  NyblerBindingType type;
 } NyblerGlslBinding;
 
 typedef enum NyblerGlslStage {
